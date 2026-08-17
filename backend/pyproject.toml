@@ -1,0 +1,28 @@
+[project]
+name = "lms-erp-backend"
+version = "0.1.0"
+description = "Backend API for the LMS-ERP Integration Platform (College ERP + Moodle LMS)."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.13,<2.0",
+    "fastapi>=0.115,<1.0",
+    "psycopg[binary]>=3.2,<4.0",
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.3,<3.0",
+    "sqlalchemy>=2.0,<3.0",
+    "uvicorn>=0.30,<1.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
