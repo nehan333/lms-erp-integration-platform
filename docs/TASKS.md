@@ -1,70 +1,37 @@
 # Tasks
 
-## Current Sprint: Sprint 4 — Faculty & Department Modules
+## Current Sprint: Sprint 10 — Final Integration, Validation & Release Readiness
 
 Not started. The active sprint details are in `docs/SPRINT.md`.
 
 ### Preparation
 
-- [ ] Re-read `docs/PROJECT.md`, `docs/SPRINT.md`, `docs/HANDOVER.md`
-- [ ] Re-read `docs/DATABASE.md` (departments and faculty table design)
-- [ ] Review the `Department` and `Faculty` models
-- [ ] Review the Sprint 3 Student module as the reference pattern
-- [ ] Review the `get_db` dependency, test fixtures, and session setup
+- [ ] Re-read `docs/PROJECT.md`, `docs/SPRINT.md`, `docs/HANDOVER.md`, `docs/PRESENTATION.md`
+- [ ] Confirm final scope: no new features — validation, bug fixes, consistency, readiness
 
-### Schemas
+### End-to-End Validation
 
-- [ ] `DepartmentCreate`, `DepartmentUpdate`, `DepartmentRead`, `DepartmentList`
-- [ ] `FacultyCreate`, `FacultyUpdate`, `FacultyRead`, `FacultyList`
-- [ ] Validation (department_code / department_name uniqueness, faculty email / employee_id, department existence)
+- [ ] Backend suite green (`cd backend && uv run pytest` → 272 passing)
+- [ ] Frontend build + tests green (`cd frontend && npm run build && npm test` → 6 passing)
+- [ ] Live E2E: dashboard, reports, CRUD flows, Moodle status/sync behavior
+- [ ] Alembic migration head + seed integrity (no drift, `alembic check` clean)
 
-### Repository
+### Consistency
 
-- [ ] `DepartmentRepository` with CRUD data-access methods
-- [ ] `FacultyRepository` with CRUD data-access methods (incl. filtering by department)
-- [ ] Reuse/abstract a base repository if applicable
+- [ ] Cross-check docs: `CHANGELOG`, `SPRINTS`, `SPRINT`, `AI_CONTEXT`, `HANDOVER`, `API`, `DECISIONS`, `PRESENTATION`
+- [ ] Verify READMEs (root, `backend/README.md`, `frontend/README.md`) match reality
+- [ ] Resolve any documentation vs. implementation mismatches
 
-### Service
+### Fixes
 
-- [ ] `DepartmentService` with business logic and duplicate/error handling
-- [ ] `FacultyService` with business logic and error handling
-- [ ] Department existence validation when creating/updating faculty
+- [ ] Fix any bugs discovered during validation
 
-### Router / API
+### Sign-off
 
-- [ ] `GET /departments` — list departments
-- [ ] `POST /departments` — create department
-- [ ] `GET /departments/{id}` — read department
-- [ ] `PUT /departments/{id}` — update department
-- [ ] `DELETE /departments/{id}` — delete department
-- [ ] `GET /faculty` — list faculty
-- [ ] `POST /faculty` — create faculty
-- [ ] `GET /faculty/{id}` — read faculty
-- [ ] `PUT /faculty/{id}` — update faculty
-- [ ] `DELETE /faculty/{id}` — delete faculty
-- [ ] Register the department and faculty routers in the application
-
-### Swagger
-
-- [ ] Verify OpenAPI/Swagger documentation renders for department and faculty endpoints
-
-### Tests
-
-- [ ] Tests for department repository/service/API
-- [ ] Tests for faculty repository/service/API
-- [ ] Run test suite and fix failures
-
-### Documentation
-
-- [ ] Update `docs/CHANGELOG.md` with Sprint 4
-- [ ] Update `docs/SPRINTS.md` (mark Sprint 4 completed)
-- [ ] Update `docs/AI_CONTEXT.md`
-- [ ] Update `docs/HANDOVER.md` if needed
-- [ ] Update `docs/TASKS.md` (new sprint)
-- [ ] Append Sprint 4 prompt summary to `docs/PROMPTS.md`
-- [ ] Update `docs/API.md` with department and faculty endpoints
+- [ ] Mark the project ready for manual deployment / presentation
+- [ ] Update `docs/CHANGELOG.md`, `docs/SPRINTS.md`, `docs/SPRINT.md` (project complete), `docs/AI_CONTEXT.md`, `docs/HANDOVER.md`, `docs/PROMPTS.md`
 
 ### Review
 
-- [ ] Code review of all changes
-- [ ] Verify no out-of-scope modules were touched
+- [ ] Final review of all changes
+- [ ] Verify nothing out of scope was touched (no production deployment)

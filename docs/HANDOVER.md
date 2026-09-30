@@ -29,9 +29,22 @@ Code reference files (read when touching that layer):
 - `backend/alembic/versions/*` — migrations.
 - `backend/scripts/seed.py` — seed data.
 - `backend/app/schemas/student.py` — Pydantic schemas (reference pattern for new modules).
+- `backend/app/schemas/department.py`, `backend/app/schemas/faculty.py` — department/faculty schemas.
 - `backend/app/repositories/student.py` — repository pattern.
+- `backend/app/repositories/department.py`, `backend/app/repositories/faculty.py` — department/faculty repositories.
 - `backend/app/services/student.py` — service + domain exception pattern.
+- `backend/app/services/department.py`, `backend/app/services/faculty.py` — department/faculty services.
 - `backend/app/api/students.py` — router + error-mapping pattern.
+- `backend/app/api/departments.py`, `backend/app/api/faculty.py` — department/faculty routers.
+- `backend/app/schemas/course.py|enrollment.py|attendance.py|grade.py` — Sprint 5 schemas.
+- `backend/app/repositories/course.py|enrollment.py|attendance.py|grade.py` — Sprint 5 repositories.
+- `backend/app/services/course.py|enrollment.py|attendance.py|grade.py` — Sprint 5 services.
+- `backend/app/api/courses.py|enrollments.py|attendance.py|grades.py` — Sprint 5 routers.
+- `backend/app/integrations/moodle/*` — Sprint 7 Moodle integration layer.
+- `frontend/lib/api.js` — frontend API client.
+- `frontend/components/EntityForm.js` — reusable CRUD form.
+- `frontend/app/page.js` — dashboard page pattern (server component fetching the API).
+- `frontend/tests/*` — frontend tests (Node built-in runner).
 - `backend/tests/*` — pytest fixtures and test patterns (dedicated `lms_erp_test` database).
 
 ## 2. How to Determine the Current Sprint
@@ -90,13 +103,16 @@ Checklist after each sprint:
 
 ## 6. Current State Summary
 
-- **Completed**: Sprint 1 (Backend Foundation), Sprint 2 (Database Design & Foundation), Sprint 3 (Student Management Module).
-- **Current**: Sprint 4 — Faculty & Department Modules (not started).
-- **Database**: 8 tables, migration `0001` applied (still at head), seeded (5/10/50/20/120/500/120).
-- **API**: `GET /health` and the full Student CRUD API (`/students`).
-- **Running**: `uv run uvicorn app.main:app --reload` in `backend/`; health check at `GET /health`; Swagger at `GET /docs`.
-- **Tests**: `uv run pytest` from `backend/` (45 passing) against the dedicated `lms_erp_test` database.
-- **Reference implementation**: the Student module (`app/schemas/student.py`, `app/repositories/student.py`, `app/services/student.py`, `app/api/students.py`, `tests/`) is the pattern to follow for new modules.
+- **Completed**: Sprint 1 (Backend Foundation), Sprint 2 (Database Design & Foundation), Sprint 3 (Student Management Module), Sprint 4 (Faculty & Department Modules), Sprint 5 (Course & Enrollment Modules incl. Attendance and Grades), Sprint 6 (Dashboard & Reports incl. Sync Logs), Sprint 7 (Moodle Integration), Sprint 8 (Frontend Integration), Sprint 9 (Testing & Final Preparation).
+- **Current**: Sprint 10 — Final Integration, Validation & Release Readiness, not started.
+- **Database**: 8 tables, migration `0001` applied (still at head), seeded (5/10/50/20/120/500/120), `sync_logs` left empty (dev unchanged post-verification). `uv run alembic check` clean (no model/DB drift).
+- **API**: `GET /health`; Student (`/students`), Department (`/departments`), Faculty (`/faculty`), Course (`/courses`), Enrollment (`/enrollments`), Attendance (`/attendance`), Grade (`/grades`) CRUD; Dashboard (`/dashboard/overview`), Reports (`/reports/*`), Sync Logs (`/sync-logs`), Moodle (`/integrations/moodle/status`, `/integrations/moodle/sync`). 24 documented routes.
+- **Frontend**: Next.js (JavaScript, CSS Modules, App Router) under `frontend/` — dashboard, reports, CRUD pages (students/departments/faculty/courses), Moodle sync page. Run `npm run dev` (default port 3000); API base configurable via `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
+- **Running**: backend `uv run uvicorn app.main:app --reload` in `backend/` (Swagger at `/docs`); frontend `npm run dev` in `frontend/`.
+- **Tests**: backend `uv run pytest` from `backend/` (272 passing); frontend `npm test` from `frontend/` (6 tests).
+- **Presentation**: see `docs/PRESENTATION.md` for a demo runbook and feature list.
+- **Reference implementation**: the Student / Department / Faculty / Course / Enrollment / Attendance / Grade modules are the patterns to follow for new modules; `sync_logs` is populated by the Sprint 7 Moodle integration engine.
+- **Deployment**: handled manually by the project owner; out of scope for all sprints.
 
 ## 7. Golden Rules for AI Agents
 

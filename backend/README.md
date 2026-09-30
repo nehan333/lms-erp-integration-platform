@@ -81,7 +81,7 @@ curl http://localhost:8000/health
 
 ## Tests
 
-The pytest suite covers the Student module (repository, service, and API layers). It runs against a dedicated PostgreSQL test database (`lms_erp_test`) that is created automatically; set `TEST_DATABASE_URL` to override the connection string. The dev/seeded database is never touched.
+The pytest suite covers the implemented modules (repository, service, and API layers). It runs against a dedicated PostgreSQL test database (`lms_erp_test`) that is created automatically; set `TEST_DATABASE_URL` to override the connection string. The dev/seeded database is never touched.
 
 ```bash
 uv run pytest
@@ -98,16 +98,16 @@ uv run pytest tests/test_api.py -q
 ```
 backend/
 ├── app/
-│   ├── api/              # API routers (health check only in Sprint 1)
+│   ├── api/              # API routers (health, students, departments, faculty, courses, enrollments, attendance, grades, dashboard, reports, sync_logs, integrations/moodle)
 │   ├── core/             # Settings and logging configuration
 │   ├── db/               # Engine, session factory, declarative base
 │   ├── integrations/
-│   │   └── moodle/       # Moodle REST integration (future sprint)
+│   │   └── moodle/       # Moodle REST integration (client, errors, payloads) — Sprint 7
 │   ├── middlewares/      # Custom middleware (future sprint)
 │   ├── models/           # SQLAlchemy ORM models (Sprint 2)
-│   ├── repositories/     # Data-access layer (future sprint)
-│   ├── schemas/          # Pydantic schemas (future sprint)
-│   ├── services/         # Business logic (future sprint)
+│   ├── repositories/     # Data-access layer (student, department, faculty, course, enrollment, attendance, grade, dashboard, reports, sync_log, moodle)
+│   ├── schemas/          # Pydantic schemas (student, department, faculty, course, enrollment, attendance, grade, dashboard, reports, sync_log, moodle)
+│   ├── services/         # Business logic (student, department, faculty, course, enrollment, attendance, grade, dashboard, reports, sync_log, moodle)
 │   ├── utils/            # Shared helpers (future sprint)
 │   └── main.py           # Application entry point
 ├── alembic/              # Database migration scripts
@@ -129,7 +129,13 @@ Settings are managed with pydantic-settings and read from environment variables 
 | `LOG_LEVEL`     | Root logger level                            | `INFO`                                                        |
 | `DATABASE_URL`  | PostgreSQL connection string (psycopg v3)    | `postgresql+psycopg://postgres:postgres@localhost:5432/lms_erp` |
 | `CORS_ORIGINS`  | Allowed origins, comma-separated             | `*`                                                           |
+| `MOODLE_BASE_URL` | Moodle site base URL                       | *(empty)*                                                   |
+| `MOODLE_WSTOKEN` | Moodle Web Services token                   | *(empty)*                                                   |
+| `MOODLE_TIMEOUT_SECONDS` | HTTP timeout for Moodle calls        | `30`                                                         |
+| `MOODLE_DEFAULT_CATEGORY_ID` | Moodle category for created courses | `1`                                                          |
+| `MOODLE_STUDENT_ROLE_ID` | Moodle student role id for enrolment | `5`                                                          |
+| `MOODLE_ATTENDANCE_WSFUNCTION` | Attendance wsfunction to call       | `mod_attendance_add_take`                                    |
 
 ## Layer Conventions
 
-Requests flow through **API → Service → Repository → Database**. The folders exist in Sprint 1; the implementations land in later sprints.
+Requests flow through **API → Service → Repository → Database**. Business logic stays in services, all SQLAlchemy queries live in repositories, and routers stay thin.

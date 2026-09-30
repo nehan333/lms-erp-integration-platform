@@ -115,3 +115,63 @@ Every important architectural decision made so far, with the reasoning behind it
 
 - **Decision**: Student email is validated with a small regex in a Pydantic `field_validator` and normalized to lowercase, rather than using `EmailStr`.
 - **Reason**: `EmailStr` requires the `email-validator` package, which was not part of the approved stack; the regex keeps the dependency footprint minimal while enforcing a valid format and case-insensitive uniqueness.
+
+## D23 — Guarded hard delete for departments
+
+- **Decision**: `DELETE /departments/{id}` is a hard delete but is refused with `409 Conflict` whenever the department still has faculty, students, or courses assigned (`DepartmentInUseError`).
+- **Reason**: Departments have no `status` column (unlike students/faculty, which soft-delete). Because faculty, students, and courses reference `departments.department_id`, an in-use department cannot be deleted without destroying academic history. The guard returns a clean domain error instead of a raw foreign-key violation.
+
+## D24 — Guarded hard delete for courses
+
+- **Decision**: `DELETE /courses/{id}` is a hard delete but is refused with `409 Conflict` whenever the course still has enrollments, attendance, or grades (`CourseInUseError`).
+- **Reason**: Courses have no `status` column and are referenced by enrollments, attendance, and grades (mirrors D23 for departments).
+
+## D25 — Attendance/grades require only referencing-entity existence
+
+- **Decision**: Creating an attendance or grade record validates only that the referenced student and course exist; it does not require the student to be enrolled in the course.
+- **Reason**: The documented schema does not state that attendance/grades require an enrollment. Keeping the rule minimal matches the design and avoids inventing business requirements.
+
+## D26 — Attendance status via `Literal`; grade marks via bounded `Decimal`
+
+- **Decision**: Attendance `status` is enforced at the schema level with `Literal["Present", "Absent"]` (matching the DB check constraint), and grade `internal_marks`/`external_marks` are `Decimal` bounded to 0–100 with up to 2 decimal places.
+- **Reason**: Uses Pydantic to reject invalid values at the boundary (422) before they reach the repository, consistent with the DB constraints. `final_grade` is validated by length only (max 5 chars) because the DB has no check constraint on it.
+
+## D27 — Sync Logs are write-only from the integration engine
+
+- **Decision**: The `sync_logs` table and its API are read-only from CRUD modules. Only the Sprint 7 Moodle integration engine writes via `SyncLogRepository.create` / `SyncLogService.record`.
+- **Reason**: Keeps the audit trail authoritative (no arbitrary log creation) while exposing a clean read API (`GET /sync-logs`, `GET /sync-logs/{id}`) ahead of the integration work.
+
+## D28 — Dashboard & Reports are pure read/aggregate endpoints
+
+- **Decision**: Dashboard and report endpoints only run deterministic aggregate `COUNT`/`GROUP BY` queries over existing data; they perform no writes and hold no business mutation logic.
+- **Reason**: Statistics are derived views of the ERP data; keeping them read-only avoids divergence and is consistent with the task's intent of summaries "based on the existing database".
+
+## D29 — Moodle identity derived from ERP keys (no mapping table)
+
+- **Decision**: Moodle users map to ERP students by `username = roll_number` and Moodle courses map to ERP courses by `shortname = course_code`; synchronization is find-or-create using these keys. No ERP→Moodle ID mapping table was added.
+- **Reason**: Adding a mapping table would require a new migration, which is out of scope (schema unchanged, migration still at head `0001`). Key-based identity keeps every sync idempotent.
+
+## D30 — Every Moodle call validated honestly; partial failure logged as `Failed`
+
+- **Decision**: Each synchronization call validates Moodle's actual response (Moodle error payloads raise `MoodleAPIError`; e.g. `core_grades_update_grades` must return `result: true` with no failures to be `Success`). If any item in an operation fails, the operation's `sync_logs` entry is recorded as `Failed` with a per-item message (partial success is never reported as full success).
+- **Reason**: Enforces the "no fake success" requirement and keeps the audit trail (`sync_logs`) trustworthy.
+
+## D31 — Attendance sync uses a configurable wsfunction
+
+- **Decision**: Attendance synchronization invokes `MOODLE_ATTENDANCE_WSFUNCTION` (default `mod_attendance_add_take`) with params derived from ERP attendance records.
+- **Reason**: Moodle has no core Web Services function for attendance; the function belongs to the mod_attendance plugin. Making it configurable keeps the integration clean without hard-coding a plugin-specific contract, and it is still exercised with mock tests.
+
+## D32 — Frontend: Next.js App Router, server components for reads, client components for writes
+
+- **Decision**: The frontend uses Next.js (JavaScript + CSS Modules, App Router). Data reads happen in server components that fetch the API with `cache: "no-store"` (hence SSR/dynamic routes); CRUD forms and the delete button are client components that submit via the shared `lib/api.js` client.
+- **Reason**: Keeps the frontend simple (no client-side data-fetching library — no extra dependencies beyond `next`/`react`/`react-dom`), keeps the ERP as the single source of truth, and lets every page render fresh data via the same backend contract.
+
+## D33 — Frontend tests use Node's built-in `node:test`
+
+- **Decision**: Frontend tests are written with Node's built-in `node:test` runner (invoked by `npm test`) and stub `global.fetch`; the project uses `"type": "module"` so `lib/api.js` imports cleanly.
+- **Reason**: Exercises the API client and error handling without adding any JavaScript test framework as a dependency (respecting the "no new deps unless required" rule), and the build/start still succeeds with `"type": "module"`.
+
+## D34 — Frontend tests are sequential and reset `global.fetch` per case
+
+- **Decision**: Frontend API-client tests run with `{ concurrency: false }` and each case sets its own fetch stub via a shared `stubFetch(status, body)` helper rather than relying on module-level setup.
+- **Reason**: `node:test` runs top-level tests concurrently and `global.fetch` is shared global state; a test that swapped the stub for its own assertions leaked state into a later test (an intermittent false failure). Making each test self-contained removed the nondeterminism found during Sprint 9 hardening.

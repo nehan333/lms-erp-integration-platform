@@ -27,9 +27,9 @@ Guidelines for contributing to the LMS–ERP Integration Platform.
 - **Routes**: lowercase plural nouns (e.g., `/students`).
 - **Query params**: `snake_case`.
 
-### Frontend (future)
+### Frontend
 
-- Follow Next.js/JavaScript conventions (PascalCase components, camelCase variables) when implemented.
+- Follow Next.js/JavaScript conventions (PascalCase components, camelCase variables).
 
 ## 2. Folder Conventions
 

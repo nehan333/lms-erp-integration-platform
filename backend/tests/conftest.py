@@ -103,3 +103,153 @@ def student_data(**overrides) -> dict:
 @pytest.fixture
 def make_student_data():
     return student_data
+
+
+def department_data(**overrides) -> dict:
+    data = {
+        "department_code": "CSE",
+        "department_name": "Computer Science and Engineering",
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.fixture
+def make_department_data():
+    return department_data
+
+
+def faculty_data(**overrides) -> dict:
+    data = {
+        "employee_id": "FAC001",
+        "name": "Test Faculty",
+        "email": "test.faculty@college.edu",
+        "phone": "+91 9000000001",
+        "designation": "Assistant Professor",
+        "department_id": None,
+        "status": True,
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.fixture
+def make_faculty_data():
+    return faculty_data
+
+
+def course_data(**overrides) -> dict:
+    data = {
+        "course_code": "CS101",
+        "course_name": "Data Structures",
+        "credits": 4,
+        "semester": 1,
+        "department_id": None,
+        "faculty_id": None,
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.fixture
+def make_course_data():
+    return course_data
+
+
+def enrollment_data(**overrides) -> dict:
+    data = {
+        "student_id": None,
+        "course_id": None,
+        "academic_year": "2025-2026",
+        "semester": 1,
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.fixture
+def make_enrollment_data():
+    return enrollment_data
+
+
+def attendance_data(**overrides) -> dict:
+    data = {
+        "student_id": None,
+        "course_id": None,
+        "date": "2025-08-01",
+        "status": "Present",
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.fixture
+def make_attendance_data():
+    return attendance_data
+
+
+def grade_data(**overrides) -> dict:
+    data = {
+        "student_id": None,
+        "course_id": None,
+        "internal_marks": "35.50",
+        "external_marks": "45.00",
+        "final_grade": "B+",
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.fixture
+def make_grade_data():
+    return grade_data
+
+
+def seed_student_and_course(db_session):
+    """Create a department, faculty, student, and course; return their ids+pks."""
+    from app.models.course import Course
+    from app.models.department import Department
+    from app.models.faculty import Faculty
+    from app.models.student import Student
+
+    dept = Department(department_code="CSE", department_name="Computer Science")
+    db_session.add(dept)
+    db_session.commit()
+    db_session.refresh(dept)
+
+    faculty = Faculty(
+        employee_id="FAC001",
+        name="Prof A",
+        email="a@college.edu",
+        designation="Professor",
+        department_id=dept.id,
+    )
+    db_session.add(faculty)
+    db_session.commit()
+    db_session.refresh(faculty)
+
+    student = Student(
+        roll_number="CS25001",
+        name="Test Student",
+        email="test.student@student.college.edu",
+        department_id=dept.id,
+        semester=1,
+        section="A",
+    )
+    db_session.add(student)
+    db_session.commit()
+    db_session.refresh(student)
+
+    course = Course(
+        course_code="CS101",
+        course_name="Data Structures",
+        credits=4,
+        semester=1,
+        department_id=dept.id,
+        faculty_id=faculty.id,
+    )
+    db_session.add(course)
+    db_session.commit()
+    db_session.refresh(course)
+
+    return {"dept": dept, "faculty": faculty, "student": student, "course": course}

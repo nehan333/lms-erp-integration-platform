@@ -1,6 +1,6 @@
 # Current Sprint
 
-## Sprint 4 - Faculty & Department Modules
+## Sprint 10 - Final Integration, Validation & Release Readiness
 
 ### Status
 
@@ -8,44 +8,32 @@ Not started.
 
 ### Goal
 
-Implement the complete **Faculty Management** and **Department Management** modules for the ERP.
+End-to-end review and release readiness.
 
 ### Scope
 
-- Department CRUD operations
-- Faculty CRUD operations
-- Department ↔ Faculty relationships
-- Repository, Service, and Router layers
-- Swagger/OpenAPI documentation
-- API endpoints for departments and faculty
+- Full end-to-end validation (backend + frontend + integration)
+- Fix discovered bugs
+- Final documentation consistency
+- Mark the project ready for manual deployment / presentation
 
 ### Restrictions
 
 The following are **out of scope** for this sprint:
 
-- No Courses module
-- No Enrollment module
-- No Attendance / Grades modules
-- No Moodle integration
-- No Frontend work
+- Production deployment (handled manually by the project owner)
 
 ### Deliverables
 
-- [ ] Department Repository / Service / Router
-- [ ] Faculty Repository / Service / Router
-- [ ] Pydantic schemas for Department and Faculty
-- [ ] Validation rules
-- [ ] CRUD endpoints (create, read, update, delete, list)
-- [ ] Swagger/OpenAPI documentation
-- [ ] Tests (per project workflow)
+- [ ] Full end-to-end validation passes
+- [ ] Discovered bugs fixed
+- [ ] Documentation internally consistent
+- [ ] Project marked ready for manual deployment / presentation
 
 ### Constraints
 
-- Follow the approved tech stack (FastAPI, SQLAlchemy 2.0, Pydantic v2, PostgreSQL, Alembic).
-- Follow the existing architecture: **API → Service → Repository → Database**.
-- Reuse the existing `Department` / `Faculty` models, `get_db` dependency, and settings.
-- Reuse the existing Student-module patterns (schemas, repository, service, router, tests).
-- Keep code modular and production-ready.
+- Never delete or weaken existing tests (backend 272 / frontend 6 must keep passing).
+- No schema changes unless strictly required (expect migration still at head `0001`).
 
 ---
 

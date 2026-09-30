@@ -9,9 +9,13 @@ node_modules/
 
 # Next.js
 .next/
+out/
 
 # Environment Variables
 .env
+.env.*
+!.env.example
+!.env.local.example
 
 # Logs
 *.log
@@ -27,3 +31,10 @@ node_modules/
 
 # IDE
 .idea/
+
+# Moodle local/test environment
+moodle-test/moodle/
+moodle-test/moodledata/
+
+# Local Moodle Docker environment
+moodle-test/moodle-docker/

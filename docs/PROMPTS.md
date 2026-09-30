@@ -54,9 +54,88 @@ Summaries of the sprint prompts (instructions) used to drive development. Each n
 
 ## Sprint 4 — Faculty & Department Modules
 
+### Prompt Summary
+
+- **Scope**: Implement the Faculty and Department management modules only.
+- **Generated**:
+  - `backend/app/schemas/department.py` — `DepartmentCreate`, `DepartmentUpdate`, `DepartmentRead`, `DepartmentList`.
+  - `backend/app/schemas/faculty.py` — `FacultyCreate`, `FacultyUpdate`, `FacultyRead`, `FacultyList`.
+  - `backend/app/repositories/department.py` — `DepartmentRepository` (CRUD + search + pagination + `has_children`).
+  - `backend/app/repositories/faculty.py` — `FacultyRepository` (CRUD + filters + pagination; `department_exists` reuses `DepartmentRepository`).
+  - `backend/app/services/department.py` — `DepartmentService` + domain exceptions (`DepartmentNotFoundError`, `DuplicateDepartmentError`, `DepartmentInUseError`).
+  - `backend/app/services/faculty.py` — `FacultyService` + domain exceptions (`FacultyNotFoundError`, `DuplicateFacultyError`, `DepartmentNotFoundError`).
+  - `backend/app/api/departments.py` and `backend/app/api/faculty.py`; registered in `app/main.py`.
+  - `backend/tests/test_departments.py`, `backend/tests/test_faculty.py` + `department_data`/`faculty_data` helpers in `conftest.py` (59 new tests).
+- **Forbidden**: Courses, Enrollments, Attendance, Grades; users table; auth/JWT; Moodle; sync engine; dashboard; reports; frontend; deployment; new migrations (schema unchanged).
+- **Decisions**: D23 — department delete refused while the department has faculty/students/courses (`409`).
+- **Outcome**: Full CRUD verified live against the seeded DB; test suite 104/104; migration `0001` still at head; `GET /health` unchanged.
+
+---
+
+## Sprint 5 — Course & Enrollment Modules
+
+### Prompt Summary
+
+- **Scope**: Implement the Course, Enrollment, Attendance, and Grades modules only.
+- **Generated**:
+  - `backend/app/schemas/{course,enrollment,attendance,grade}.py` — `*Create`, `*Update`, `*Read`, `*List`.
+  - `backend/app/repositories/{course,enrollment,attendance,grade}.py` — CRUD + existence + unique lookups + filters.
+  - `backend/app/services/{course,enrollment,attendance,grade}.py` — services + domain exceptions.
+  - `backend/app/api/{courses,enrollments,attendance,grades}.py`; registered in `app/main.py`.
+  - `backend/tests/test_{courses,enrollments,attendance,grades}.py` + `seed_student_and_course` helper in `conftest.py` (100 new tests).
+- **Forbidden**: Dashboard/Reports/Statistics, Sync Logs API, Moodle, Frontend, Deployment, new migrations (schema unchanged), users table, auth/JWT.
+- **Outcome**: All CRUD verified live against the seeded DB; test suite 204/204; migration `0001` still at head; no unrelated features added.
+
+---
+
+## Sprint 6 — Dashboard & Reports
+
 ### Ready for Next Prompt
 
-- **Status**: Not started. Waiting for the Sprint 4 prompt.
-- **Expected scope**: Department CRUD, Faculty CRUD, relationships, repository/service/router layers, schemas, validation, Swagger, tests.
-- **Expected restrictions**: no Courses, no Enrollments, no Attendance/Grades, no Moodle, no Frontend.
-- **After completing**: append the Sprint 4 prompt summary below, update `CHANGELOG.md`, `SPRINTS.md`, `AI_CONTEXT.md`, `TASKS.md`, `API.md`, and `HANDOVER.md`.
+- **Status**: Completed.
+- **Scope**: Dashboard & statistic endpoints (counts + grade distribution + students per department), Reports endpoints (per-course enrollment, attendance summary, grade distribution, per-department course counts), Sync Logs read/list API, repository/service/router layers, schemas, Swagger, tests.
+- **Forbidden**: Moodle integration (Sprint 7), Frontend, Deployment, new migrations (schema unchanged), writing to `sync_logs` from CRUD (only the Sprint 7 integration engine writes).
+- **Outcome**: `GET /dashboard/overview`, four `/reports/*` endpoints, and `GET /sync-logs` + `GET /sync-logs/{id}` implemented and verified live against the seeded DB; test suite 230/230; migration `0001` still at head; `sync_logs` empty until Sprint 7 populates it.
+
+---
+
+## Sprint 7 — Moodle Integration
+
+### Ready for Next Prompt
+
+- **Status**: Completed.
+- **Scope**: Clean Moodle integration layer (auth/config/API requests/response validation/timeouts/failures), create Moodle users/courses, enrollment, grade and attendance synchronization, sync results recorded to `sync_logs`; `GET /integrations/moodle/status` + `POST /integrations/moodle/sync`; tests with mocks/fixtures.
+- **Forbidden**: Frontend, Deployment, new migrations (schema unchanged), new tables (no mapping table — identity derived from ERP keys).
+- **Outcome**: Full sync verified against a simulated Moodle REST server (50 students / 20 courses / 120 enrollments / 20 graded courses / 500 attendance, all Success, idempotent second run); status returns `connected: false` and sync returns `503` when Moodle is not configured; test suite 267/267; migration `0001` still at head.
+
+---
+
+## Sprint 8 — Frontend Integration
+
+### Ready for Next Prompt
+
+- **Status**: Completed.
+- **Scope**: Next.js app (JavaScript + CSS Modules, App Router) under `frontend/`; API client; dashboard + reports UI; CRUD pages/forms for students, departments, faculty, courses; Moodle sync page; frontend tests via Node's built-in runner.
+- **Forbidden**: Backend feature creep, new backend migrations, Deployment.
+- **Outcome**: `npm run build` and `npm test` pass; pages verified live against the running backend (data + CORS mutations); backend suite still 267/267; migration `0001` still at head.
+
+---
+
+## Sprint 9 — Testing & Final Preparation
+
+### Ready for Next Prompt
+
+- **Status**: Completed.
+- **Scope**: Full backend + frontend + integration testing, bug fixes, API/database verification, final documentation, presentation preparation. No new features.
+- **Forbidden**: Feature development, new dependencies, Deployment, schema changes.
+- **Outcome**: New integration test suite (backend 272 passing incl. OpenAPI completeness, full-chain dashboard aggregates, Moodle boundary tests); frontend tests expanded to 6 (deterministic via stubFetch + sequential mode); `alembic check` clean, migration `0001` at head, seed intact; live E2E verified (create/edit/delete through UI origin); `docs/PRESENTATION.md` runbook added.
+
+---
+
+## Sprint 10 — Final Integration, Validation & Release Readiness
+
+### Ready for Next Prompt
+
+- **Status**: Not started. Waiting for the Sprint 10 prompt.
+- **Expected scope**: Full end-to-end validation, fix discovered bugs, final documentation consistency, mark the project ready for manual deployment / presentation (deployment itself is out of scope).
+- **After completing**: append the Sprint 10 prompt summary below, update `CHANGELOG.md`, `SPRINTS.md`, `AI_CONTEXT.md`, `TASKS.md`, `API.md`, and `HANDOVER.md`.
