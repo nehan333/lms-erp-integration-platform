@@ -81,10 +81,12 @@ def test_openapi_route_completeness(client):
     expected = {
         "/health",
         "/students", "/students/{student_id}",
+        "/students/bulk", "/students/{student_id}/attendance-summary",
         "/departments", "/departments/{department_id}",
         "/faculty", "/faculty/{faculty_id}",
         "/courses", "/courses/{course_id}",
         "/enrollments", "/enrollments/{enrollment_id}",
+        "/enrollments/bulk", "/enrollments/bulk/preview",
         "/attendance", "/attendance/{attendance_id}",
         "/grades", "/grades/{grade_id}",
         "/dashboard/overview",

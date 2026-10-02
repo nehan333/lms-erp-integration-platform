@@ -156,10 +156,11 @@ Every important architectural decision made so far, with the reasoning behind it
 - **Decision**: Each synchronization call validates Moodle's actual response (Moodle error payloads raise `MoodleAPIError`; e.g. `core_grades_update_grades` must return `result: true` with no failures to be `Success`). If any item in an operation fails, the operation's `sync_logs` entry is recorded as `Failed` with a per-item message (partial success is never reported as full success).
 - **Reason**: Enforces the "no fake success" requirement and keeps the audit trail (`sync_logs`) trustworthy.
 
-## D31 — Attendance sync uses a configurable wsfunction
+## D31 — Attendance sync via mod_attendance WS functions (superseded by D35)
 
 - **Decision**: Attendance synchronization invokes `MOODLE_ATTENDANCE_WSFUNCTION` (default `mod_attendance_add_take`) with params derived from ERP attendance records.
 - **Reason**: Moodle has no core Web Services function for attendance; the function belongs to the mod_attendance plugin. Making it configurable keeps the integration clean without hard-coding a plugin-specific contract, and it is still exercised with mock tests.
+- **Superseded**: the configurable setting was removed once the real `mod_attendance_*` function set was installed and verified — attendance sync now calls the concrete plugin functions (see **D35**).
 
 ## D32 — Frontend: Next.js App Router, server components for reads, client components for writes
 
@@ -175,3 +176,38 @@ Every important architectural decision made so far, with the reasoning behind it
 
 - **Decision**: Frontend API-client tests run with `{ concurrency: false }` and each case sets its own fetch stub via a shared `stubFetch(status, body)` helper rather than relying on module-level setup.
 - **Reason**: `node:test` runs top-level tests concurrently and `global.fetch` is shared global state; a test that swapped the stub for its own assertions leaked state into a later test (an intermittent false failure). Making each test self-contained removed the nondeterminism found during Sprint 9 hardening.
+
+## D35 — Attendance sync uses the concrete `mod_attendance_*` WS functions, and the integration role must hold its capabilities at the system context
+
+- **Decision**: Attendance sync calls `mod_attendance_add_attendance`, `mod_attendance_add_session`, `mod_attendance_get_sessions`, `mod_attendance_get_session`, and `mod_attendance_update_user_status` directly (the configurable `MOODLE_ATTENDANCE_WSFUNCTION` setting was removed). The custom integration role's capabilities for this plugin are stored with `contextid = 1` (system context).
+- **Reason**: Moodle's `accesslib` resolves capabilities by joining `role_capabilities.contextid` to the `{context}` table. Rows inserted with `contextid = 0` are never loaded, so `has_capability('mod/attendance:view')` stays false, Moodle marks the activity hidden, and `require_login` rejects every call with "Activity is hidden". Granting the capabilities at the system context (then purging caches) is what makes the attendance Web Services usable. Hard-coding the verified function set removes a setting that could silently point at a non-existent function.
+
+## D36 — Bulk CSV travels as a JSON string field, not multipart form data
+
+- **Decision**: `POST /students/bulk` accepts the raw CSV text in a JSON `csv` field (`BulkStudentImportRequest`) rather than as a multipart file upload.
+- **Reason**: The backend has no `python-multipart` dependency and the stack rule forbids adding one casually. JSON keeps the endpoint testable with the existing `TestClient` and the same error contract as every other route.
+
+## D37 — Bulk operations are preview-then-execute and idempotent
+
+- **Decision**: `POST /enrollments/bulk/preview` is a pure dry run (200, nothing written) and `POST /enrollments/bulk` is the only writer. Both reuse the same `BulkEnrollmentRequest` body; pairs that already exist are counted as `skipped`, never duplicated. `POST /students/bulk` exposes the same shape through `dry_run: true`.
+- **Reason**: Bulk writes are the highest-blast-radius operation in the ERP. A preview lets a human confirm cohort size and per-course counts before anything is created, and idempotency makes an interrupted or repeated run harmless (both for the ERP and for Moodle enrolments).
+
+## D38 — Moodle boolean parameters are always sent as `"0"` / `"1"` strings
+
+- **Decision**: Payload builders encode Moodle `PARAM_BOOL` values as the strings `"0"` / `"1"`, never as Python `False` / `True`.
+- **Reason**: Moodle's parameter parser rejects the literal string `"False"` with `invalidparameter`, which surfaces as an opaque Web Services error. The tests assert the encoded values so a regression is caught before it reaches the live server.
+
+## D39 — Final grades are converted to Moodle points, with the original letter kept in `str_feedback`
+
+- **Decision**: `core_grades_update_grades` receives `rawgrade` computed from a lower-bound letter table (`A+` ≥ 90 … `F` = 0); a numeric ERP `final_grade` passes through unchanged, and the original letter is also placed in `str_feedback`.
+- **Reason**: Moodle grades are numeric; the ERP stores a letter. The lower-bound table is explicit and reviewable rather than inferred. Note the current Moodle implementation discards `str_feedback` (it only forwards `userid`/`rawgrade` to `grade_update`), so the letter is not persisted — a documented Moodle limitation, not a client bug.
+
+## D40 — Bulk enrollment auto-syncs to Moodle, and "not configured" is logged as a pending sync — not silently skipped
+
+- **Decision**: `POST /enrollments/bulk` (and bulk student import with `sync_moodle: true`) runs the Moodle sync immediately for the ids it created. When Moodle is not configured the work is still committed and a `Failed` sync log records that the data is pending sync.
+- **Reason**: The ERP is the source of truth and enrollments are not "done" until Moodle knows about them, but losing ERP data because a config var is missing would be worse. Recording an honest `Failed`/"pending sync" log keeps the audit trail truthful and gives the operator something to re-run.
+
+## D41 — Percentages are `null` when the denominator is zero
+
+- **Decision**: Attendance percentages (`StudentAttendanceCourse.percentage`, `StudentAttendanceSummary.percentage`, and the reports that feed them) are `null` when `total == 0`.
+- **Reason**: Reporting `0%` for a student with no recorded attendance would slander them, and `100%` would be a lie. The frontend renders `—` for `null`, so the absence of data stays visibly absent.

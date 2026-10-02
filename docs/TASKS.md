@@ -2,36 +2,32 @@
 
 ## Current Sprint: Sprint 10 — Final Integration, Validation & Release Readiness
 
-Not started. The active sprint details are in `docs/SPRINT.md`.
+Active — see `docs/SPRINT.md` for scope and status.
 
-### Preparation
+### Phases A–F (delivered 2026-10-02)
 
-- [ ] Re-read `docs/PROJECT.md`, `docs/SPRINT.md`, `docs/HANDOVER.md`, `docs/PRESENTATION.md`
-- [ ] Confirm final scope: no new features — validation, bug fixes, consistency, readiness
+- [x] **A** — Bulk course enrollment: `POST /enrollments/bulk/preview` + `POST /enrollments/bulk` (auto Moodle sync, idempotent)
+- [x] **B** — Attendance sync working: `role_capabilities.contextid` 0 → 1, caches purged, live probe green
+- [x] **C** — Grade sync working: letters → numeric points, `str_feedback` carries the original letter
+- [x] **D** — Bulk student CSV import: `POST /students/bulk` (JSON-as-CSV, dry-run, targeted Moodle sync)
+- [x] **E** — Student detail page with attendance-by-course: `GET /students/{id}/attendance-summary` + `/students/[id]`, `/students/bulk`, `/enrollments`, `/enrollments/bulk`, Nav "Enrollments"
+- [x] **F** — Documentation: `AI_CONTEXT`, `CHANGELOG`, `HANDOVER`, `API`, `TASKS`, `SPRINT`, `DECISIONS`
 
-### End-to-End Validation
+### Validation (remaining)
 
-- [ ] Backend suite green (`cd backend && uv run pytest` → 272 passing)
-- [ ] Frontend build + tests green (`cd frontend && npm run build && npm test` → 6 passing)
-- [ ] Live E2E: dashboard, reports, CRUD flows, Moodle status/sync behavior
+- [ ] Backend suite green (`cd backend && uv run pytest` → **311 passing**)
+- [x] Frontend build + tests green (`cd frontend && npm run build && npm test` → 6 passing, 17 pages)
+- [x] Live E2E: bulk enrollment + Moodle sync, attendance/grade sync probe, new pages render real data
 - [ ] Alembic migration head + seed integrity (no drift, `alembic check` clean)
 
 ### Consistency
 
-- [ ] Cross-check docs: `CHANGELOG`, `SPRINTS`, `SPRINT`, `AI_CONTEXT`, `HANDOVER`, `API`, `DECISIONS`, `PRESENTATION`
-- [ ] Verify READMEs (root, `backend/README.md`, `frontend/README.md`) match reality
+- [x] `CHANGELOG`, `SPRINT`, `AI_CONTEXT`, `HANDOVER`, `API`, `DECISIONS`, `TASKS` updated
+- [ ] Cross-check remaining docs: `SPRINTS`, `PRESENTATION`, `PROMPTS`, READMEs (root, `backend/README.md`, `frontend/README.md`)
 - [ ] Resolve any documentation vs. implementation mismatches
-
-### Fixes
-
-- [ ] Fix any bugs discovered during validation
 
 ### Sign-off
 
 - [ ] Mark the project ready for manual deployment / presentation
-- [ ] Update `docs/CHANGELOG.md`, `docs/SPRINTS.md`, `docs/SPRINT.md` (project complete), `docs/AI_CONTEXT.md`, `docs/HANDOVER.md`, `docs/PROMPTS.md`
-
-### Review
-
-- [ ] Final review of all changes
-- [ ] Verify nothing out of scope was touched (no production deployment)
+- [ ] Final review of all changes (`git status` / `git diff`)
+- [ ] Verify nothing out of scope was touched (no production deployment, no commit unless asked)

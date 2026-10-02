@@ -21,6 +21,9 @@ export default async function StudentsPage() {
         <Link href="/students/new" className="btn">
           + New Student
         </Link>
+        <Link href="/students/bulk" className="btn btn-secondary">
+          Bulk Import
+        </Link>
       </div>
 
       {data.error && <div className="error">Could not load: {data.error}</div>}
@@ -42,7 +45,9 @@ export default async function StudentsPage() {
             {data.items.map((student) => (
               <tr key={student.id}>
                 <td>{student.roll_number}</td>
-                <td>{student.name}</td>
+                <td>
+                  <Link href={`/students/${student.id}`}>{student.name}</Link>
+                </td>
                 <td>{student.email}</td>
                 <td>{student.semester}</td>
                 <td>{student.section}</td>

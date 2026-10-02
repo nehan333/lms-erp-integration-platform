@@ -341,3 +341,133 @@ def test_openapi_documents_attendance(client):
     assert "/attendance/{attendance_id}" in schema["paths"]
     for name in ["AttendanceCreate", "AttendanceUpdate", "AttendanceRead", "AttendanceList"]:
         assert name in schema["components"]["schemas"]
+
+# --------------------------------------------------------------------------- #
+# Per-student attendance summary (student detail page)
+# --------------------------------------------------------------------------- #
+
+
+def _seed_two_course_attendance(db_session):
+    """One student with attendance in two courses + an empty third course."""
+    import datetime as dt
+
+    from app.models.attendance import Attendance
+    from app.models.course import Course
+    from app.models.department import Department
+    from app.models.student import Student
+
+    dept = Department(department_code="CSE", department_name="Computer Science")
+    db_session.add(dept)
+    db_session.flush()
+
+    student = Student(
+        roll_number="CS25001", name="Summary Student",
+        email="summary@student.edu", department_id=dept.id,
+        semester=1, section="A",
+    )
+    db_session.add(student)
+    db_session.flush()
+
+    courses = []
+    for code, name in [("CS101", "Data Structures"), ("CS102", "Algorithms"),
+                       ("CS103", "Databases")]:
+        course = Course(
+            course_code=code, course_name=name, credits=3,
+            semester=1, department_id=dept.id,
+        )
+        db_session.add(course)
+        courses.append(course)
+    db_session.flush()
+
+    # CS101: 2 present + 1 absent = 66.7%
+    for offset, status in enumerate(["Present", "Present", "Absent"]):
+        db_session.add(Attendance(
+            student_id=student.id, course_id=courses[0].id,
+            date=dt.date(2025, 8, 1 + offset), status=status,
+        ))
+    # CS102: 1 present = 100%
+    db_session.add(Attendance(
+        student_id=student.id, course_id=courses[1].id,
+        date=dt.date(2025, 8, 1), status="Present",
+    ))
+    # CS103: no records
+    db_session.commit()
+    return {"dept": dept, "student": student, "courses": courses}
+
+
+def test_student_attendance_summary_breakdown(db_session):
+    from app.services.attendance import AttendanceService
+
+    ctx = _seed_two_course_attendance(db_session)
+    summary = AttendanceService(db_session).student_summary(ctx["student"].id)
+
+    assert summary.student_id == ctx["student"].id
+    assert [c.course_code for c in summary.courses] == ["CS101", "CS102"]
+    cs101, cs102 = summary.courses
+    assert (cs101.present, cs101.total, cs101.percentage) == (2, 3, 66.7)
+    assert (cs102.present, cs102.total, cs102.percentage) == (1, 1, 100.0)
+    # Overall: 3 of 4
+    assert summary.present == 3
+    assert summary.total == 4
+    assert summary.percentage == 75.0
+
+
+def test_student_attendance_summary_no_records(db_session):
+    from app.models.student import Student
+    from app.services.attendance import AttendanceService
+
+    ctx = _seed_two_course_attendance(db_session)
+    summary = AttendanceService(db_session).student_summary(ctx["student"].id)
+    assert summary.percentage is not None
+
+    # A student with zero attendance anywhere.
+    empty = Student(
+        roll_number="CS25002", name="No Records",
+        email="empty@student.edu", department_id=ctx["dept"].id,
+        semester=1, section="A",
+    )
+    db_session.add(empty)
+    db_session.commit()
+
+    zero = AttendanceService(db_session).student_summary(empty.id)
+    assert zero.courses == []
+    assert zero.total == 0
+    assert zero.percentage is None  # no guessing on division by zero
+
+
+def test_student_attendance_summary_unknown_student(db_session):
+    import uuid
+
+    import pytest
+
+    from app.services.attendance import AttendanceService, StudentNotFoundError
+
+    with pytest.raises(StudentNotFoundError):
+        AttendanceService(db_session).student_summary(uuid.uuid4())
+
+
+def test_api_student_attendance_summary(client, db_session):
+    ctx = _seed_two_course_attendance(db_session)
+    response = client.get(f"/students/{ctx['student'].id}/attendance-summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["student_id"] == str(ctx["student"].id)
+    assert len(body["courses"]) == 2
+    assert body["total"] == 4
+    assert body["percentage"] == 75.0
+    codes = [c["course_code"] for c in body["courses"]]
+    assert codes == ["CS101", "CS102"]
+
+
+def test_api_student_attendance_summary_unknown_student_is_404(client, db_session):
+    import uuid
+
+    response = client.get(f"/students/{uuid.uuid4()}/attendance-summary")
+    assert response.status_code == 404
+
+
+def test_openapi_documents_student_attendance_summary(client):
+    schema = client.get("/openapi.json").json()
+    assert "/students/{student_id}/attendance-summary" in schema["paths"]
+    for name in ["StudentAttendanceSummary", "StudentAttendanceCourse"]:
+        assert name in schema["components"]["schemas"]

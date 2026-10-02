@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.attendance import Attendance
@@ -48,6 +48,32 @@ class AttendanceRepository:
     def course_exists(self, course_id: UUID) -> bool:
         """Return ``True`` if the referenced course exists."""
         return self.db.get(Course, course_id) is not None
+
+    def summary_by_course_for_student(
+        self, student_id: UUID
+    ) -> list[tuple[UUID, str, str, int, int]]:
+        """Return ``(course_id, course_code, course_name, present, total)``
+        per course the student has attendance records for, sorted by code."""
+        present = func.sum(
+            case((Attendance.status == "Present", 1), else_=0)
+        ).label("present")
+        total = func.count(Attendance.id).label("total")
+        stmt = (
+            select(
+                Attendance.course_id,
+                Course.course_code,
+                Course.course_name,
+                present,
+                total,
+            )
+            .join(Course, Course.id == Attendance.course_id)
+            .where(Attendance.student_id == student_id)
+            .group_by(
+                Attendance.course_id, Course.course_code, Course.course_name
+            )
+            .order_by(Course.course_code)
+        )
+        return [tuple(row) for row in self.db.execute(stmt).all()]
 
     def list(
         self,

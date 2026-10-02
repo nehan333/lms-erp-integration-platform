@@ -6,7 +6,7 @@ Uses a fake client so no real Moodle is contacted. The fake honours
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -33,6 +33,7 @@ class FakeMoodleClient:
         self.calls: list[tuple[str, dict]] = []
         self.default_response: object = []
         self.response_overrides: dict[str, object] = {}
+        self.response_sequences: dict[str, list] = {}
         self.error_overrides: dict[str, list[MoodleError]] = {}
 
     def call(self, wsfunction: str, params: dict) -> object:
@@ -41,6 +42,9 @@ class FakeMoodleClient:
             errors = self.error_overrides[wsfunction]
             if errors:
                 raise errors.pop(0)
+        sequence = self.response_sequences.get(wsfunction)
+        if sequence:
+            return sequence.pop(0)
         if wsfunction in self.response_overrides:
             return self.response_overrides[wsfunction]
         return self.default_response
@@ -103,17 +107,34 @@ def _seed_erp(db_session):
 
 def _success_client() -> FakeMoodleClient:
     client = FakeMoodleClient()
+    client.response_overrides["core_webservice_get_site_info"] = {
+        "userid": 3, "sitename": "Test LMS",
+    }
     client.response_overrides["core_user_get_users_by_field"] = [{"id": 1}]
     client.response_overrides["core_course_get_courses_by_field"] = {
         "courses": [{"id": 2}]
     }
     client.response_overrides["core_user_create_users"] = [{"id": 1}]
     client.response_overrides["core_course_create_courses"] = [{"id": 2}]
+    client.response_overrides["core_course_get_contents"] = [
+        {"modules": [
+            {"id": 1, "modname": "forum", "instance": 1, "name": "Announcements"},
+            {"id": 21, "modname": "attendance", "instance": 1, "name": "Attendance"},
+        ]}
+    ]
     client.response_overrides["enrol_manual_enrol_users"] = []
-    client.response_overrides["core_grades_update_grades"] = {
-        "result": True, "failures": [],
+    client.response_overrides["core_grades_update_grades"] = 0
+    client.response_overrides["mod_attendance_get_sessions"] = [
+        {
+            "id": 10,
+            "sessdate": int(datetime(2025, 8, 1).timestamp()),
+            "statusset": 0,
+        },
+    ]
+    client.response_overrides["mod_attendance_get_session"] = {
+        "statuses": [{"id": 5, "description": "Present"}],
     }
-    client.response_overrides["mod_attendance_add_take"] = []
+    client.response_overrides["mod_attendance_update_user_status"] = None
     return client
 
 
@@ -228,17 +249,22 @@ def test_sync_grades_success(db_session):
     assert log.status == "Success"
     graded = [c for c in client.calls if c[0] == "core_grades_update_grades"]
     assert len(graded) == 1
-    assert graded[0][1]["grades[0][str_grade]"] == "B+"
+    params = graded[0][1]
+    assert params["component"] == "mod_forum"
+    assert params["activityid"] == "1"
+    assert params["grades[0][grade]"] == "70.0"
+    assert params["grades[0][str_feedback]"] == "ERP final grade: B+"
 
 
-def test_sync_grades_failure_when_result_not_true(db_session):
+def test_sync_grades_failure_when_result_not_ok(db_session):
     _seed_erp(db_session)
     client = _success_client()
-    client.response_overrides["core_grades_update_grades"] = {"result": False}
+    client.response_overrides["core_grades_update_grades"] = 1
 
     log = MoodleSyncService(db_session, client).sync_grades()
     assert log.status == "Failed"
-    assert "result not true" in log.message
+    assert "Moodle returned status 1" in log.message
+    assert "1 of 1 courses failed" in log.message
 
 
 # --------------------------------------------------------------------------- #
@@ -251,20 +277,47 @@ def test_sync_attendance_success(db_session):
     client = _success_client()
     log = MoodleSyncService(db_session, client).sync_attendance()
     assert log.status == "Success"
-    submitted = [c for c in client.calls if c[0] == "mod_attendance_add_take"]
+    submitted = [c for c in client.calls if c[0] == "mod_attendance_update_user_status"]
     assert len(submitted) == 1
-    assert submitted[0][1]["status"] == "Present"
+    params = submitted[0][1]
+    assert params["sessionid"] == "10"
+    assert params["studentid"] == "1"
+    assert params["statusid"] == "5"
+    assert params["takenbyid"] == "3"
+
+
+def test_sync_attendance_creates_missing_session(db_session):
+    _seed_erp(db_session)
+    client = _success_client()
+    created = {"id": 11, "sessdate": int(datetime(2025, 8, 1).timestamp()),
+               "statusset": 0}
+    client.response_sequences["mod_attendance_get_sessions"] = [[], [created]]
+    client.response_overrides["mod_attendance_add_session"] = {"sessionid": 11}
+    log = MoodleSyncService(db_session, client).sync_attendance()
+    assert log.status == "Success"
+    assert any(c[0] == "mod_attendance_add_session" for c in client.calls)
 
 
 def test_sync_attendance_failure(db_session):
     _seed_erp(db_session)
     client = _success_client()
-    client.error_overrides["mod_attendance_add_take"] = [
+    client.error_overrides["mod_attendance_update_user_status"] = [
         MoodleAPIError("nopermissions", "not allowed")
     ]
     log = MoodleSyncService(db_session, client).sync_attendance()
     assert log.status == "Failed"
     assert "1 of 1 records failed" in log.message
+
+
+def test_sync_attendance_failure_when_status_unknown(db_session):
+    _seed_erp(db_session)
+    client = _success_client()
+    client.response_overrides["mod_attendance_get_session"] = {
+        "statuses": [{"id": 6, "description": "Absent"}],
+    }
+    log = MoodleSyncService(db_session, client).sync_attendance()
+    assert log.status == "Failed"
+    assert "no status 'Present'" in log.message
 
 
 # --------------------------------------------------------------------------- #

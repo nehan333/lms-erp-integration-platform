@@ -6,6 +6,8 @@ No business logic lives here.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,19 +24,30 @@ class MoodleSyncRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list_students(self) -> list[Student]:
-        """Return all active students (source of truth for Moodle users)."""
-        return list(
-            self.db.scalars(
-                select(Student).where(Student.status.is_(True))
-            ).all()
-        )
+    def list_students(
+        self, student_ids: list[UUID] | None = None
+    ) -> list[Student]:
+        """Return active students, optionally limited to the given ids."""
+        statement = select(Student).where(Student.status.is_(True))
+        if student_ids is not None:
+            if not student_ids:
+                return []
+            statement = statement.where(Student.id.in_(student_ids))
+        return list(self.db.scalars(statement).all())
 
     def list_courses(self) -> list[Course]:
         return list(self.db.scalars(select(Course)).all())
 
-    def list_enrollments(self) -> list[Enrollment]:
-        return list(self.db.scalars(select(Enrollment)).all())
+    def list_enrollments(
+        self, enrollment_ids: list[UUID] | None = None
+    ) -> list[Enrollment]:
+        """Return enrollments, optionally limited to the given ids."""
+        statement = select(Enrollment)
+        if enrollment_ids is not None:
+            if not enrollment_ids:
+                return []
+            statement = statement.where(Enrollment.id.in_(enrollment_ids))
+        return list(self.db.scalars(statement).all())
 
     def list_grades(self) -> list[Grade]:
         return list(self.db.scalars(select(Grade)).all())

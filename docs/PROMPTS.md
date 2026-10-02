@@ -136,6 +136,7 @@ Summaries of the sprint prompts (instructions) used to drive development. Each n
 
 ### Ready for Next Prompt
 
-- **Status**: Not started. Waiting for the Sprint 10 prompt.
-- **Expected scope**: Full end-to-end validation, fix discovered bugs, final documentation consistency, mark the project ready for manual deployment / presentation (deployment itself is out of scope).
-- **After completing**: append the Sprint 10 prompt summary below, update `CHANGELOG.md`, `SPRINTS.md`, `AI_CONTEXT.md`, `TASKS.md`, `API.md`, and `HANDOVER.md`.
+- **Status**: In progress — phases A–F delivered (2026-10-02). Remaining: sign-off / presentation readiness.
+- **Expected scope**: Full end-to-end validation, fix discovered bugs, final documentation consistency, mark the project ready for manual deployment / presentation (deployment itself is out of scope). Extended at the user's request with phases A–F.
+- **Delivered**: bulk course enrollment (`POST /enrollments/bulk/preview` + `/bulk`, auto Moodle sync, idempotent); attendance sync fixed for real (root cause `role_capabilities.contextid = 0` → `1`, decision D35) and grade sync working (letters → numeric points, D39); bulk student CSV import (`POST /students/bulk`, JSON-as-CSV, D36); student detail page with attendance-by-course (`GET /students/{id}/attendance-summary` + 4 new frontend pages, 17 build routes); docs updated (`AI_CONTEXT`, `CHANGELOG`, `HANDOVER`, `API`, `TASKS`, `SPRINT`, `DECISIONS`, `PRESENTATION`).
+- **Outcome**: backend **311 passing** (was 272; no tests removed), frontend 6 passing + `npm run build` green, live Moodle probe green end-to-end, live API E2E green (bulk enroll → sync `Success` → idempotent re-run), OpenAPI 28 paths / 49 operations.

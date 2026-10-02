@@ -31,13 +31,14 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["*"]
 
     # Moodle Web Services integration (Sprint 7)
+    # Attendance sync uses the official mod_attendance plugin functions
+    # (mod_attendance_*); Moodle has no core attendance Web Service.
     MOODLE_BASE_URL: str = ""
     MOODLE_WSTOKEN: str = ""
     MOODLE_DEFAULT_PASSWORD: str = ""
     MOODLE_TIMEOUT_SECONDS: float = 30.0
     MOODLE_DEFAULT_CATEGORY_ID: int = 1
     MOODLE_STUDENT_ROLE_ID: int = 5
-    MOODLE_ATTENDANCE_WSFUNCTION: str = "mod_attendance_add_take"
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

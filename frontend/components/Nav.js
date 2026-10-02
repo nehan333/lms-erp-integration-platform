@@ -9,6 +9,7 @@ const links = [
   { href: "/departments", label: "Departments" },
   { href: "/faculty", label: "Faculty" },
   { href: "/courses", label: "Courses" },
+  { href: "/enrollments", label: "Enrollments" },
   { href: "/reports", label: "Reports" },
   { href: "/sync", label: "Moodle Sync" },
 ];

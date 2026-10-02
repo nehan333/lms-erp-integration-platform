@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.sync_log import SyncLogRead
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -74,3 +76,62 @@ class StudentList(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class BulkStudentImportRequest(BaseModel):
+    """Payload for importing students from CSV text.
+
+    The CSV body travels as JSON (``csv``) so no multipart upload is needed.
+    Expected columns (header row, case-insensitive): ``roll_number``, ``name``,
+    ``email``, ``semester``, ``section`` and optionally ``phone``. Every row is
+    imported into ``department_id``.
+    """
+
+    csv: str = Field(..., min_length=1, max_length=1_000_000)
+    department_id: UUID
+    dry_run: bool = False
+    sync_moodle: bool = True
+
+
+class BulkStudentRowError(BaseModel):
+    """One rejected CSV row (1-based, header included in the count)."""
+
+    row: int
+    error: str
+
+
+class BulkStudentImportResult(BaseModel):
+    """Outcome of a bulk student import run."""
+
+    total: int
+    created: int
+    skipped: int
+    failed: int
+    dry_run: bool
+    errors: list[BulkStudentRowError] = []
+    sync_log: SyncLogRead | None = None
+
+
+class StudentAttendanceCourse(BaseModel):
+    """Attendance totals for one course of a student.
+
+    ``percentage`` is ``None`` when the student has no attendance records in
+    the course (division by zero is not a guess we make).
+    """
+
+    course_id: UUID
+    course_code: str
+    course_name: str
+    present: int
+    total: int
+    percentage: float | None = None
+
+
+class StudentAttendanceSummary(BaseModel):
+    """Attendance-by-course breakdown for a student detail page."""
+
+    student_id: UUID
+    courses: list[StudentAttendanceCourse] = []
+    present: int = 0
+    total: int = 0
+    percentage: float | None = None

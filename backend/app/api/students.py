@@ -8,9 +8,26 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.moodle import get_moodle_client
 from app.db.session import get_db
-from app.schemas.student import StudentCreate, StudentList, StudentRead, StudentUpdate
+from app.integrations.moodle.client import MoodleClient
+from app.schemas.student import (
+    BulkStudentImportRequest,
+    BulkStudentImportResult,
+    StudentAttendanceSummary,
+    StudentCreate,
+    StudentList,
+    StudentRead,
+    StudentUpdate,
+)
+from app.schemas.sync_log import SyncLogRead
+from app.services.attendance import (
+    AttendanceService,
+    StudentNotFoundError as AttendanceStudentNotFoundError,
+)
+from app.services.moodle import MoodleSyncService
 from app.services.student import (
+    BulkImportFormatError,
     DepartmentNotFoundError,
     DuplicateStudentError,
     StudentNotFoundError,
@@ -28,6 +45,10 @@ def _to_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, DuplicateStudentError):
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        )
+    if isinstance(exc, BulkImportFormatError):
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         )
     if isinstance(exc, DepartmentNotFoundError):
         return HTTPException(
@@ -77,6 +98,53 @@ def create_student(
     except (StudentNotFoundError, DuplicateStudentError, DepartmentNotFoundError) as exc:
         raise _to_http_error(exc) from exc
     return StudentRead.model_validate(student)
+
+
+@router.post(
+    "/bulk",
+    response_model=BulkStudentImportResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Import students from CSV (body is JSON with csv text)",
+)
+def bulk_import_students(
+    payload: BulkStudentImportRequest,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[MoodleClient, Depends(get_moodle_client)],
+) -> BulkStudentImportResult:
+    service = StudentService(db)
+    try:
+        result, created_ids = service.bulk_import(payload)
+    except (BulkImportFormatError, DepartmentNotFoundError) as exc:
+        raise _to_http_error(exc) from exc
+
+    if (
+        created_ids
+        and payload.sync_moodle
+        and not payload.dry_run
+    ):
+        sync_log = MoodleSyncService(db, client).sync_students(
+            student_ids=created_ids
+        )
+        result.sync_log = SyncLogRead.model_validate(sync_log)
+    return result
+
+
+@router.get(
+    "/{student_id}/attendance-summary",
+    response_model=StudentAttendanceSummary,
+    summary="Attendance-by-course breakdown for a student",
+)
+def student_attendance_summary(
+    student_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> StudentAttendanceSummary:
+    service = AttendanceService(db)
+    try:
+        return service.student_summary(student_id)
+    except AttendanceStudentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
 
 
 @router.get("/{student_id}", response_model=StudentRead, summary="Get a student")

@@ -50,6 +50,46 @@ class EnrollmentRepository:
         """Return ``True`` if the referenced course exists."""
         return self.db.get(Course, course_id) is not None
 
+    def list_students_for_cohort(
+        self, department_id: UUID, semester: int
+    ) -> list[Student]:
+        """Return active students of a department at a given semester."""
+        stmt = (
+            select(Student)
+            .where(
+                Student.department_id == department_id,
+                Student.semester == semester,
+                Student.status.is_(True),
+            )
+            .order_by(Student.roll_number)
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def list_courses_by_ids(self, course_ids: list[UUID]) -> list[Course]:
+        """Return the courses matching ``course_ids`` (order unspecified)."""
+        if not course_ids:
+            return []
+        stmt = select(Course).where(Course.id.in_(course_ids))
+        return list(self.db.scalars(stmt).all())
+
+    def existing_pairs(
+        self,
+        student_ids: list[UUID],
+        course_ids: list[UUID],
+        academic_year: str,
+        semester: int,
+    ) -> set[tuple[UUID, UUID]]:
+        """Return ``(student_id, course_id)`` pairs already enrolled."""
+        if not student_ids or not course_ids:
+            return set()
+        stmt = select(Enrollment.student_id, Enrollment.course_id).where(
+            Enrollment.student_id.in_(student_ids),
+            Enrollment.course_id.in_(course_ids),
+            Enrollment.academic_year == academic_year,
+            Enrollment.semester == semester,
+        )
+        return {(row[0], row[1]) for row in self.db.execute(stmt).all()}
+
     def list(
         self,
         *,

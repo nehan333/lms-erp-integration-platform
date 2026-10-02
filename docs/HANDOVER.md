@@ -38,11 +38,16 @@ Code reference files (read when touching that layer):
 - `backend/app/api/departments.py`, `backend/app/api/faculty.py` — department/faculty routers.
 - `backend/app/schemas/course.py|enrollment.py|attendance.py|grade.py` — Sprint 5 schemas.
 - `backend/app/repositories/course.py|enrollment.py|attendance.py|grade.py` — Sprint 5 repositories.
-- `backend/app/services/course.py|enrollment.py|attendance.py|grade.py` — Sprint 5 services.
-- `backend/app/api/courses.py|enrollments.py|attendance.py|grades.py` — Sprint 5 routers.
+- `backend/app/services/course.py|enrollment.py|attendance.py|grade.py` — Sprint 5 services (the enrollment service also holds `bulk_preview`/`bulk_create`).
+- `backend/app/api/courses.py|enrollments.py|attendance.py|grades.py` — Sprint 5 routers (the enrollments router holds `/bulk` + `/bulk/preview`).
+- `backend/app/services/student.py` — also holds `_parse_rows`/`bulk_import` for CSV import.
+- `backend/app/api/students.py` — also holds `/students/bulk` and `/{id}/attendance-summary`.
+- `backend/app/services/moodle.py` — the sync engine (attendance/grade sync, `sync_students(student_ids=…)`).
+- `backend/app/integrations/moodle/payloads.py` — pure payload builders (bools as `"0"`/`"1"`, grade points, attendance params).
 - `backend/app/integrations/moodle/*` — Sprint 7 Moodle integration layer.
 - `frontend/lib/api.js` — frontend API client.
 - `frontend/components/EntityForm.js` — reusable CRUD form.
+- `frontend/components/BulkStudentImport.js`, `frontend/components/BulkEnrollForm.js` — bulk workflow client components (state + `api.create`, result tables).
 - `frontend/app/page.js` — dashboard page pattern (server component fetching the API).
 - `frontend/tests/*` — frontend tests (Node built-in runner).
 - `backend/tests/*` — pytest fixtures and test patterns (dedicated `lms_erp_test` database).
@@ -104,14 +109,15 @@ Checklist after each sprint:
 ## 6. Current State Summary
 
 - **Completed**: Sprint 1 (Backend Foundation), Sprint 2 (Database Design & Foundation), Sprint 3 (Student Management Module), Sprint 4 (Faculty & Department Modules), Sprint 5 (Course & Enrollment Modules incl. Attendance and Grades), Sprint 6 (Dashboard & Reports incl. Sync Logs), Sprint 7 (Moodle Integration), Sprint 8 (Frontend Integration), Sprint 9 (Testing & Final Preparation).
-- **Current**: Sprint 10 — Final Integration, Validation & Release Readiness, not started.
-- **Database**: 8 tables, migration `0001` applied (still at head), seeded (5/10/50/20/120/500/120), `sync_logs` left empty (dev unchanged post-verification). `uv run alembic check` clean (no model/DB drift).
-- **API**: `GET /health`; Student (`/students`), Department (`/departments`), Faculty (`/faculty`), Course (`/courses`), Enrollment (`/enrollments`), Attendance (`/attendance`), Grade (`/grades`) CRUD; Dashboard (`/dashboard/overview`), Reports (`/reports/*`), Sync Logs (`/sync-logs`), Moodle (`/integrations/moodle/status`, `/integrations/moodle/sync`). 24 documented routes.
-- **Frontend**: Next.js (JavaScript, CSS Modules, App Router) under `frontend/` — dashboard, reports, CRUD pages (students/departments/faculty/courses), Moodle sync page. Run `npm run dev` (default port 3000); API base configurable via `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
+- **Current**: Sprint 10 — Final Integration, Validation & Release Readiness. Phases A–F delivered (bulk course enrollment with auto Moodle sync, working attendance sync, working grade sync, bulk student CSV import, student detail page with attendance-by-course, docs updated); remaining work is sign-off / presentation readiness.
+- **Database**: 8 tables, migration `0001` applied (still at head), seeded (5/10/50/20/120/500/120), `sync_logs` populated by the live sync runs (bulk enrollment wrote a `Success` entry). `uv run alembic check` clean (no model/DB drift).
+- **API**: `GET /health`; Student (`/students`, plus `POST /students/bulk` and `GET /students/{id}/attendance-summary`), Department (`/departments`), Faculty (`/faculty`), Course (`/courses`), Enrollment (`/enrollments`, plus `POST /enrollments/bulk` and `POST /enrollments/bulk/preview`), Attendance (`/attendance`), Grade (`/grades`) CRUD; Dashboard (`/dashboard/overview`), Reports (`/reports/*`), Sync Logs (`/sync-logs`), Moodle (`/integrations/moodle/status`, `/integrations/moodle/sync`). **28 paths / 49 operations**.
+- **Frontend**: Next.js (JavaScript, CSS Modules, App Router) under `frontend/` — dashboard, reports, CRUD pages (students/departments/faculty/courses), student detail with attendance-by-course, bulk student import, enrollment list, bulk enrollment workflow, Moodle sync page. 17 build routes. Run `npm run dev` (default port 3000); API base configurable via `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
+- **Moodle test environment**: `moodle-test/` runs Moodle 5.0.10 in Docker (`moodle-docker-webserver-1`, `moodle-docker-db-1`). Web service `LMS-ERP Integration` (id 2) exposes 13 functions; token user `lms_erp_sync` (userid 3); custom role id 9 `lms-erpintegration` holds the 4 `mod_attendance` capabilities **with `contextid = 1`** (decision D35 — rows with `contextid = 0` are invisible to accesslib and make the activity appear hidden). **Never** delete `moodle-postgres-data` or run `docker volume prune`. A stray service id 3 named "Attendance" exists and is harmless.
 - **Running**: backend `uv run uvicorn app.main:app --reload` in `backend/` (Swagger at `/docs`); frontend `npm run dev` in `frontend/`.
-- **Tests**: backend `uv run pytest` from `backend/` (272 passing); frontend `npm test` from `frontend/` (6 tests).
+- **Tests**: backend `uv run pytest` from `backend/` (**311 passing**); frontend `npm test` from `frontend/` (6 tests); `npm run build` green (17 pages).
 - **Presentation**: see `docs/PRESENTATION.md` for a demo runbook and feature list.
-- **Reference implementation**: the Student / Department / Faculty / Course / Enrollment / Attendance / Grade modules are the patterns to follow for new modules; `sync_logs` is populated by the Sprint 7 Moodle integration engine.
+- **Reference implementation**: the Student / Department / Faculty / Course / Enrollment / Attendance / Grade modules are the patterns to follow for new modules; bulk flows follow `StudentService.bulk_import` / `EnrollmentService.bulk_create` (preview → execute, idempotent, savepoint-per-row).
 - **Deployment**: handled manually by the project owner; out of scope for all sprints.
 
 ## 7. Golden Rules for AI Agents

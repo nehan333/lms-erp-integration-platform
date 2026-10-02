@@ -1,6 +1,6 @@
 # API Reference
 
-> **Status**: `GET /health`, the Student, Department, Faculty (Sprint 3–4), Course, Enrollment, Attendance, Grades (Sprint 5), Dashboard, Reports, Sync Logs (Sprint 6), and Moodle integration (Sprint 7) modules are implemented and documented.
+> **Status**: `GET /health`, the Student, Department, Faculty (Sprint 3–4), Course, Enrollment, Attendance, Grades (Sprint 5), Dashboard, Reports, Sync Logs (Sprint 6), and Moodle integration (Sprint 7) modules are implemented and documented. Bulk operations and the per-student attendance summary (Sprint 10 scope) are documented in §4.2 and §4.6.
 
 ## 1. Overview
 
@@ -140,6 +140,75 @@ Performs a **soft delete**: sets `status` to `false` so the record is preserved 
 
 - `204 No Content` — student deactivated.
 - `404 Not Found` — no student with that id.
+
+#### `POST /students/bulk` — Bulk import students from CSV
+
+Imports many students in one request. The CSV body travels **inside JSON** (`csv` field) so no multipart upload is required.
+
+**Request body** — `BulkStudentImportRequest`
+
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `csv` | string | yes | 1–1,000,000 chars; header row required |
+| `department_id` | UUID | yes | every row is imported into this department |
+| `dry_run` | boolean | no | default `false` — validate only, persist nothing |
+| `sync_moodle` | boolean | no | default `true` — sync newly created students to Moodle |
+
+**CSV format** — first row is the header (case-insensitive; a UTF-8 BOM is tolerated). Required columns: `roll_number`, `name`, `email`, `semester`, `section`. Optional: `phone`. Unknown columns are ignored.
+
+**Responses**
+
+- `201 Created` — `BulkStudentImportResult`
+- `400 Bad Request` — CSV is unusable (missing/invalid header, no data rows, or more than 5000 rows) or `department_id` does not reference an existing department.
+- `422 Unprocessable Entity` — body validation failure (e.g. `department_id` not a UUID).
+
+```json
+{
+  "total": 3,
+  "created": 2,
+  "skipped": 0,
+  "failed": 1,
+  "dry_run": false,
+  "errors": [{ "row": 4, "error": "email already exists" }],
+  "sync_log": { "id": "…", "module": "moodle", "action": "sync_students", "status": "Success", "message": "2 students synced", "created_at": "…", "updated_at": "…" }
+}
+```
+
+Notes:
+
+- Row numbers in `errors[].row` are **1-based and include the header** (so the first data row is 2).
+- `skipped` counts rows rejected for duplicates (same `roll_number`/`email` already in the database); `failed` counts rows that could not be validated at all.
+- When nothing is created (or `dry_run: true`) `sync_log` is `null`.
+- Rows are inserted in savepoint chunks, so one bad row does not roll back the good ones.
+- The CSV is capped at **5000 data rows** (`MAX_BULK_ROWS`); larger files are rejected with `400`.
+
+#### `GET /students/{student_id}/attendance-summary` — Attendance by course
+
+Returns the per-course attendance totals that back the student detail page.
+
+**Path parameter**: `student_id` (UUID).
+
+**Responses**
+
+- `200 OK` — `StudentAttendanceSummary`
+- `404 Not Found` — no student with that id.
+
+```json
+{
+  "student_id": "e6c5bc49-6ad2-4c7f-86d7-b67484c82a94",
+  "courses": [
+    { "course_id": "245e33ca-…", "course_code": "ME101", "course_name": "Engineering Mechanics", "present": 3, "total": 4, "percentage": 75.0 }
+  ],
+  "present": 6,
+  "total": 8,
+  "percentage": 75.0
+}
+```
+
+Notes:
+
+- Courses with no attendance records for this student are **omitted** from `courses` (they are not guessed at).
+- `percentage` is `null` when `total` is 0 — division by zero is never reported as `0` or `100`.
 
 ### 4.3 Departments (Sprint 4)
 
@@ -416,6 +485,70 @@ All routes live under the `/enrollments` prefix. A student cannot be enrolled in
 - `204 No Content` — enrollment deleted.
 - `404 Not Found` — no enrollment with that id.
 
+#### `POST /enrollments/bulk/preview` — Preview a bulk enrollment (dry run)
+
+Resolves a department cohort (all **active** students of `department_id` at `semester`) and reports how many enrollment rows would be created, without writing anything.
+
+**Request body** — `BulkEnrollmentRequest`
+
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `department_id` | UUID | yes | must exist in `departments` |
+| `semester` | integer | yes | 1–10 |
+| `academic_year` | string | yes | 1–20 chars |
+| `course_ids` | UUID[] | yes | 1–50 courses; each must exist **and belong to `department_id`** |
+
+**Responses**
+
+- `200 OK` — `BulkEnrollmentPreview`
+- `404 Not Found` — unknown `department_id`.
+- `400 Bad Request` — unknown `course_id`, or a course that belongs to another department.
+- `422 Unprocessable Entity` — body validation failure.
+
+```json
+{
+  "department_id": "c4cf1a11-…",
+  "semester": 1,
+  "academic_year": "2025-26",
+  "students_total": 1,
+  "courses": [
+    { "course_id": "5aa58ef9-…", "course_code": "CS101", "course_name": "Data Structures", "to_create": 1, "already_enrolled": 0 }
+  ],
+  "total_to_create": 1,
+  "total_already_enrolled": 0
+}
+```
+
+#### `POST /enrollments/bulk` — Bulk enroll a cohort (auto-syncs to Moodle)
+
+Same request body as `/bulk/preview`. Creates every missing `student × course` pair for the cohort, skips pairs that already exist, and then **synchronously pushes the newly created enrollments to Moodle** (`enrol_manual_enrol_users`).
+
+**Responses**
+
+- `201 Created` — `BulkEnrollmentResult` (with `sync_log` present when anything was created)
+- `404 Not Found` — unknown `department_id`.
+- `400 Bad Request` — unknown `course_id`, or a course from another department.
+- `422 Unprocessable Entity` — body validation failure.
+
+```json
+{
+  "department_id": "c4cf1a11-…",
+  "semester": 1,
+  "academic_year": "2025-26",
+  "students_total": 1,
+  "created": 1,
+  "skipped": 0,
+  "courses": [{ "course_id": "5aa58ef9-…", "course_code": "CS101", "created": 1, "skipped": 0 }],
+  "sync_log": { "id": "c38636c6-…", "module": "moodle", "action": "sync_enrollments", "status": "Success", "message": "1 enrollments synced", "created_at": "…", "updated_at": "…" }
+}
+```
+
+Notes:
+
+- **Idempotent**: re-running the same request reports `created: 0` and `skipped: N`; no duplicate rows and no duplicate Moodle enrolments.
+- When nothing is created (or Moodle is not configured) `sync_log` reflects the sync attempt or is absent — see decision **D30** (partial/failed syncs are logged honestly as `Failed`, never as success).
+- `service.bulk_create()` returns the created ids; the router runs `MoodleSyncService.sync_enrollments(enrollment_ids=…)` and attaches the resulting `sync_log`.
+
 ### 4.7 Attendance (Sprint 5)
 
 All routes live under the `/attendance` prefix. `status` is one of `Present` / `Absent`.
@@ -585,10 +718,14 @@ Runs, in order: `sync_students`, `sync_courses`, `sync_enrollments`, `sync_grade
 - `StudentUpdate` — partial update payload (all fields optional).
 - `StudentRead` — student response (all model fields plus `id`, `created_at`, `updated_at`).
 - `StudentList` — paginated response (`items`, `total`, `limit`, `offset`).
+- `BulkStudentImportRequest` — bulk CSV import payload (`csv`, `department_id`, `dry_run`, `sync_moodle`).
+- `BulkStudentImportResult` / `BulkStudentRowError` — bulk import outcome (`total`, `created`, `skipped`, `failed`, `dry_run`, `errors[]`, `sync_log`).
+- `StudentAttendanceSummary` / `StudentAttendanceCourse` — per-course attendance breakdown (`present`, `total`, `percentage` with `null` when `total` is 0).
 - `DepartmentCreate` / `DepartmentUpdate` / `DepartmentRead` / `DepartmentList` — department payloads and responses (see section 4.3).
 - `FacultyCreate` / `FacultyUpdate` / `FacultyRead` / `FacultyList` — faculty payloads and responses (see section 4.4).
 - `CourseCreate` / `CourseUpdate` / `CourseRead` / `CourseList` — course payloads and responses (see section 4.5).
 - `EnrollmentCreate` / `EnrollmentUpdate` / `EnrollmentRead` / `EnrollmentList` — enrollment payloads and responses (see section 4.6).
+- `BulkEnrollmentRequest` / `BulkEnrollmentPreview` / `BulkEnrollmentResult` — bulk enrollment payload, dry-run preview, and outcome (see section 4.6).
 - `AttendanceCreate` / `AttendanceUpdate` / `AttendanceRead` / `AttendanceList` — attendance payloads and responses (see section 4.7).
 - `GradeCreate` / `GradeUpdate` / `GradeRead` / `GradeList` — grade payloads and responses (see section 4.8).
 - `OverviewStatistics` — dashboard overview response (see section 4.9).
@@ -623,6 +760,11 @@ Domain errors are mapped to HTTP responses; raw database exceptions are never ex
 | `GradeNotFoundError` | `404 Not Found` |
 | `DuplicateGradeError` | `409 Conflict` |
 | `StudentNotFoundError` / `CourseNotFoundError` (attendance/grade modules) | `400 Bad Request` |
+| `BulkImportFormatError` (bulk student import) | `400 Bad Request` |
+| `DepartmentNotFoundError` (bulk student import) | `400 Bad Request` |
+| `DepartmentNotFoundError` (bulk enrollment) | `404 Not Found` |
+| `CourseNotInDepartmentError` (bulk enrollment) | `400 Bad Request` |
+| `StudentNotFoundError` (`/students/{id}/attendance-summary`) | `404 Not Found` |
 | Pydantic validation failure | `422 Unprocessable Entity` |
 | Unexpected internal error | `500 Internal Server Error` |
 

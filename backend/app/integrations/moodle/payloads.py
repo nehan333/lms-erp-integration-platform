@@ -6,14 +6,10 @@ REST uses the ``param[i][field]`` convention for repeated structures.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from app.core.config import settings
-from app.models.attendance import Attendance
 from app.models.course import Course
-from app.models.enrollment import Enrollment
-from app.models.grade import Grade
 from app.models.student import Student
 
 
@@ -70,31 +66,113 @@ def enrollment_params(
 
 
 def grade_params(
-    course_code: str, rows: list[tuple[int, str]]
+    moodle_course_id: int,
+    component: str,
+    activityid: int,
+    rows: list[tuple[int, float, str | None]],
+    itemname: str = "FinalGrade",
 ) -> dict[str, Any]:
-    """Push final grades for one course (``core_grades_update_grades``)."""
+    """Push final grades for one course (``core_grades_update_grades``).
+
+    ``core_grades_update_grades`` (Moodle 5.0) requires ``source``, ``courseid``,
+    ``component`` (e.g. ``mod_forum``), ``activityid`` (course module id),
+    ``itemnumber`` and numeric ``grades[i][grade]`` values. Moodle creates the
+    grade item when it does not exist yet (via ``itemdetails``) and returns an
+    integer status flag (0 = GRADE_UPDATE_OK).
+    """
     params: dict[str, Any] = {
-        "sourceidnumber": course_code,
-        "gradeitemname": "Final Grade",
+        "source": "lms-erp",
+        "courseid": str(moodle_course_id),
+        "component": component,
+        "activityid": str(activityid),
+        "itemnumber": "0",
+        "itemdetails[itemname]": itemname,
+        "itemdetails[gradetype]": "1",
+        "itemdetails[grademin]": "0",
+        "itemdetails[grademax]": "100",
     }
-    for index, (moodle_user_id, final_grade) in enumerate(rows):
+    for index, (moodle_user_id, grade, feedback) in enumerate(rows):
         params[f"grades[{index}][studentid]"] = str(moodle_user_id)
-        params[f"grades[{index}][str_grade]"] = final_grade
+        params[f"grades[{index}][grade]"] = str(grade)
+        if feedback:
+            params[f"grades[{index}][str_feedback]"] = feedback
     return params
 
 
-def attendance_params(
-    moodle_user_id: int,
-    moodle_course_id: int,
-    record: Attendance,
-) -> dict[str, Any]:
-    """Submit one attendance record (configurable ``mod_attendance_*`` function)."""
-    timestamp = int(
-        datetime.combine(record.date, datetime.min.time()).timestamp()
-    )
+# ERP letter grades -> points on the 0-100 scale (lower bound of the band that
+# grants the letter, see scripts/seed.py::final_grade).
+GRADE_LETTER_POINTS: dict[str, float] = {
+    "A+": 90.0,
+    "A": 80.0,
+    "B+": 70.0,
+    "B": 60.0,
+    "C": 50.0,
+    "D": 40.0,
+    "F": 0.0,
+}
+
+
+def final_grade_to_points(final_grade: str) -> float:
+    """Convert an ERP ``final_grade`` into a numeric Moodle grade (0-100).
+
+    Numeric values pass through unchanged. Letter grades map to the lower
+    bound of the ERP grading band. Raises ``ValueError`` for unknown formats so
+    callers can record an honest failure instead of pushing garbage.
+    """
+    raw = final_grade.strip()
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    key = raw.upper()
+    if key in GRADE_LETTER_POINTS:
+        return GRADE_LETTER_POINTS[key]
+    raise ValueError(f"Unsupported final_grade '{final_grade}'")
+
+
+def attendance_instance_params(course_id: int, name: str = "Attendance") -> dict[str, Any]:
+    """Create an attendance activity in a Moodle course (``mod_attendance_add_attendance``)."""
     return {
-        "courseid": str(moodle_course_id),
-        "userid": str(moodle_user_id),
-        "status": record.status,
-        "timetaken": str(timestamp),
+        "courseid": str(course_id),
+        "name": name,
+        "groupmode": "0",
+    }
+
+
+def attendance_session_params(
+    attendance_id: int, sessiontime: int, description: str = ""
+) -> dict[str, Any]:
+    """Create a session on an attendance instance (``mod_attendance_add_session``).
+
+    ``sessiontime`` is the unix timestamp of the ERP attendance date (local
+    midnight). ``groupid`` 0 matches the instance created with ``groupmode`` 0.
+    """
+    return {
+        "attendanceid": str(attendance_id),
+        "description": description,
+        "sessiontime": str(sessiontime),
+        "duration": "0",
+        "groupid": "0",
+        "addcalendarevent": "0",
+    }
+
+
+def attendance_status_params(
+    session_id: int,
+    moodle_user_id: int,
+    taken_by_id: int,
+    status_id: int,
+    status_set: int,
+) -> dict[str, Any]:
+    """Record one student's attendance (``mod_attendance_update_user_status``).
+
+    Moodle matches on (sessionid, studentid), so repeated synchronization
+    updates the existing log row instead of duplicating it.
+    """
+    return {
+        "sessionid": str(session_id),
+        "studentid": str(moodle_user_id),
+        "takenbyid": str(taken_by_id),
+        "statusid": str(status_id),
+        "statusset": str(status_set),
     }

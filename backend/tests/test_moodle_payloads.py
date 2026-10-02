@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 from app.integrations.moodle import payloads
 
 
@@ -64,24 +62,68 @@ def test_enrollment_params():
 
 
 def test_grade_params():
-    params = payloads.grade_params("CS101", [(1, "A"), (2, "B+")])
-    assert params["sourceidnumber"] == "CS101"
-    assert params["gradeitemname"] == "Final Grade"
+    rows = [(1, 85.0, "ERP final grade: A"), (2, 70.0, None)]
+    params = payloads.grade_params(2, "mod_forum", 3, rows)
+    assert params["source"] == "lms-erp"
+    assert params["courseid"] == "2"
+    assert params["component"] == "mod_forum"
+    assert params["activityid"] == "3"
+    assert params["itemnumber"] == "0"
+    assert params["itemdetails[itemname]"] == "FinalGrade"
+    assert params["itemdetails[gradetype]"] == "1"
+    assert params["itemdetails[grademin]"] == "0"
+    assert params["itemdetails[grademax]"] == "100"
     assert params["grades[0][studentid]"] == "1"
-    assert params["grades[0][str_grade]"] == "A"
+    assert params["grades[0][grade]"] == "85.0"
+    assert params["grades[0][str_feedback]"] == "ERP final grade: A"
     assert params["grades[1][studentid]"] == "2"
-    assert params["grades[1][str_grade]"] == "B+"
+    assert params["grades[1][grade]"] == "70.0"
+    assert "grades[1][str_feedback]" not in params
 
 
-def test_attendance_params():
-    record = type(
-        "A",
-        (),
-        {"date": date(2025, 8, 1), "status": "Present"},
-    )()
-    params = payloads.attendance_params(7, 9, record)
+def test_final_grade_to_points_letters():
+    assert payloads.final_grade_to_points("A+") == 90.0
+    assert payloads.final_grade_to_points("B+") == 70.0
+    assert payloads.final_grade_to_points("F") == 0.0
+    assert payloads.final_grade_to_points("  a  ") == 80.0
+
+
+def test_final_grade_to_points_numeric_passthrough():
+    assert payloads.final_grade_to_points("88.5") == 88.5
+
+
+def test_final_grade_to_points_rejects_unknown():
+    import pytest
+
+    with pytest.raises(ValueError):
+        payloads.final_grade_to_points("A-")
+
+
+def test_attendance_instance_params():
+    params = payloads.attendance_instance_params(9, "Attendance")
     assert params["courseid"] == "9"
-    assert params["userid"] == "7"
-    assert params["status"] == "Present"
-    assert params["timetaken"] == "1753986600"
-    assert params["timetaken"].isdigit()
+    assert params["name"] == "Attendance"
+    assert params["groupmode"] == "0"
+
+
+def test_attendance_session_params():
+    params = payloads.attendance_session_params(
+        7, 1753986600, description="ERP 2025-08-01"
+    )
+    assert params["attendanceid"] == "7"
+    assert params["sessiontime"] == "1753986600"
+    assert params["description"] == "ERP 2025-08-01"
+    assert params["duration"] == "0"
+    assert params["groupid"] == "0"
+    assert params["addcalendarevent"] == "0"
+
+
+def test_attendance_status_params():
+    params = payloads.attendance_status_params(
+        session_id=1, moodle_user_id=4, taken_by_id=3, status_id=5, status_set=0
+    )
+    assert params["sessionid"] == "1"
+    assert params["studentid"] == "4"
+    assert params["takenbyid"] == "3"
+    assert params["statusid"] == "5"
+    assert params["statusset"] == "0"

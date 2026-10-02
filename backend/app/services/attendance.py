@@ -16,6 +16,10 @@ from sqlalchemy.orm import Session
 from app.models.attendance import Attendance
 from app.repositories.attendance import AttendanceRepository
 from app.schemas.attendance import AttendanceCreate, AttendanceUpdate
+from app.schemas.student import (
+    StudentAttendanceCourse,
+    StudentAttendanceSummary,
+)
 
 
 class AttendanceNotFoundError(Exception):
@@ -141,3 +145,50 @@ class AttendanceService:
         attendance = self.get(attendance_id)
         self.repo.delete(attendance)
         self.db.commit()
+
+    def student_summary(self, student_id: UUID) -> StudentAttendanceSummary:
+        """Per-course attendance totals for one student.
+
+        Raises ``StudentNotFoundError`` when the student does not exist.
+        Courses with zero records are simply absent from the breakdown, and
+        the overall ``percentage`` is ``None`` when nothing was recorded.
+        """
+        if not self.repo.student_exists(student_id):
+            raise StudentNotFoundError(student_id)
+
+        courses: list[StudentAttendanceCourse] = []
+        present_total = 0
+        total_all = 0
+        for course_id, code, name, present, total in (
+            self.repo.summary_by_course_for_student(student_id)
+        ):
+            present_int = int(present or 0)
+            total_int = int(total or 0)
+            courses.append(
+                StudentAttendanceCourse(
+                    course_id=course_id,
+                    course_code=code,
+                    course_name=name,
+                    present=present_int,
+                    total=total_int,
+                    percentage=(
+                        round(present_int * 100.0 / total_int, 1)
+                        if total_int
+                        else None
+                    ),
+                )
+            )
+            present_total += present_int
+            total_all += total_int
+
+        return StudentAttendanceSummary(
+            student_id=student_id,
+            courses=courses,
+            present=present_total,
+            total=total_all,
+            percentage=(
+                round(present_total * 100.0 / total_all, 1)
+                if total_all
+                else None
+            ),
+        )

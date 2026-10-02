@@ -8,20 +8,29 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.moodle import get_moodle_client
 from app.db.session import get_db
+from app.integrations.moodle.client import MoodleClient
 from app.schemas.enrollment import (
+    BulkEnrollmentPreview,
+    BulkEnrollmentRequest,
+    BulkEnrollmentResult,
     EnrollmentCreate,
     EnrollmentList,
     EnrollmentRead,
     EnrollmentUpdate,
 )
+from app.schemas.sync_log import SyncLogRead
 from app.services.enrollment import (
+    CourseNotInDepartmentError,
     CourseNotFoundError,
+    DepartmentNotFoundError,
     DuplicateEnrollmentError,
     EnrollmentNotFoundError,
     EnrollmentService,
     StudentNotFoundError,
 )
+from app.services.moodle import MoodleSyncService
 
 router = APIRouter(prefix="/enrollments", tags=["enrollments"])
 
@@ -31,11 +40,18 @@ def _to_http_error(exc: Exception) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         )
+    if isinstance(exc, (DepartmentNotFoundError,)):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        )
     if isinstance(exc, DuplicateEnrollmentError):
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         )
-    if isinstance(exc, (StudentNotFoundError, CourseNotFoundError)):
+    if isinstance(
+        exc,
+        (StudentNotFoundError, CourseNotFoundError, CourseNotInDepartmentError),
+    ):
         return HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         )
@@ -87,6 +103,56 @@ def create_enrollment(
     ) as exc:
         raise _to_http_error(exc) from exc
     return EnrollmentRead.model_validate(enrollment)
+
+
+@router.post(
+    "/bulk/preview",
+    response_model=BulkEnrollmentPreview,
+    summary="Preview a bulk enrollment run (dry run)",
+)
+def preview_bulk_enrollments(
+    payload: BulkEnrollmentRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> BulkEnrollmentPreview:
+    service = EnrollmentService(db)
+    try:
+        return service.bulk_preview(payload)
+    except (
+        DepartmentNotFoundError,
+        CourseNotFoundError,
+        CourseNotInDepartmentError,
+    ) as exc:
+        raise _to_http_error(exc) from exc
+
+
+@router.post(
+    "/bulk",
+    response_model=BulkEnrollmentResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Bulk enroll a cohort into courses (auto-syncs to Moodle)",
+)
+def bulk_enroll(
+    payload: BulkEnrollmentRequest,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[MoodleClient, Depends(get_moodle_client)],
+) -> BulkEnrollmentResult:
+    service = EnrollmentService(db)
+    try:
+        result, created_ids = service.bulk_create(payload)
+    except (
+        DepartmentNotFoundError,
+        CourseNotFoundError,
+        CourseNotInDepartmentError,
+        DuplicateEnrollmentError,
+    ) as exc:
+        raise _to_http_error(exc) from exc
+
+    if created_ids:
+        sync_log = MoodleSyncService(db, client).sync_enrollments(
+            enrollment_ids=created_ids
+        )
+        result.sync_log = SyncLogRead.model_validate(sync_log)
+    return result
 
 
 @router.get("/{enrollment_id}", response_model=EnrollmentRead, summary="Get an enrollment")

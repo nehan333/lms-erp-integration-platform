@@ -186,7 +186,7 @@ Status: Completed (see `docs/CHANGELOG.md`).
 
 ---
 
-## Sprint 9 - Testing & Final Preparation## Sprint 9 - Testing & Final Preparation ✅
+## Sprint 9 - Testing & Final Preparation ✅
 
 ### Goal
 
@@ -205,7 +205,7 @@ Status: Completed (see `docs/CHANGELOG.md`).
 
 ---
 
-## Sprint 10 - Final Integration, Validation & Release Readiness
+## Sprint 10 - Final Integration, Validation & Release Readiness ⏳
 
 ### Goal
 
@@ -217,6 +217,16 @@ End-to-end review and release readiness.
 - Fix discovered bugs
 - Final documentation consistency
 - Mark the project ready for manual deployment / presentation
+
+### Delivered (2026-10-02, scope extended at the user's request)
+
+- **A** Bulk course enrollment with automatic Moodle sync (`POST /enrollments/bulk/preview`, `POST /enrollments/bulk`)
+- **B** Working attendance sync (root cause: `role_capabilities.contextid = 0` → `1`; see decision D35)
+- **C** Working grade sync (letters → numeric `rawgrade`, D39)
+- **D** Bulk student CSV import (`POST /students/bulk`)
+- **E** Student detail page with attendance-by-course (`GET /students/{id}/attendance-summary` + `/students/[id]`, `/students/bulk`, `/enrollments`, `/enrollments/bulk`)
+- **F** Documentation updates across `docs/*.md`
+- Verification: backend **311 passing** (was 272), frontend 6 passing + `npm run build` (17 routes), live Moodle probe green, live API E2E green.
 
 ### Out of scope
 

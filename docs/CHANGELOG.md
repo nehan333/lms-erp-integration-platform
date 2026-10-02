@@ -4,6 +4,53 @@ All notable changes are documented here. Format follows the current sprint lifec
 
 ---
 
+## Sprint 10 - Final Integration, Validation & Release Readiness — 2026-10-02
+
+Scope was extended at the user's request beyond "validation only" to close the bulk-operation and Moodle-sync gaps (phases A–F below). No schema change: migration still at head `0001`.
+
+### Fixed (Moodle integration)
+
+- **Attendance sync now works end-to-end against a live Moodle 5.0.10.** Root cause: the integration role's `mod_attendance` capabilities had been inserted with `contextid = 0`; Moodle's `accesslib` only resolves capabilities joined to the `{context}` table, so `has_capability('mod/attendance:view')` stayed false, the activity was treated as hidden, and `require_login` rejected every call (`Activity is hidden`). Fixed by granting the four capabilities at the system context (`contextid = 1`) and purging caches (decision **D35**).
+- **Bool parameters are form-encoded as `"0"` / `"1"`** instead of Python `False` (Moodle's `PARAM_BOOL` rejects `"False"` with `invalidparameter`) — decision **D38**.
+- **`MOODLE_ATTENDANCE_WSFUNCTION` removed from `app/core/config.py` / `.env.example`** — dead setting (decision D31 superseded by D35).
+- **Bug fix in `app/services/moodle.py`**: the instance dict field `_attendance_statuses` shadowed the method of the same name; renamed to `_attendance_status_cache`.
+- **Grade sync**: `core_grades_update_grades` now sends `rawgrade` derived from a lower-bound letter table (`A+` ≥ 90 … `F` = 0), numeric grades pass through, and the original letter is placed in `str_feedback` (Moodle currently discards `str_feedback` — documented limitation, decision **D39**).
+- **Attendance session strategy**: one attendance instance per course, one session per ERP attendance date at local midnight (`duration = 0`, `groupid = 0`, `addcalendarevent = "0"`), statuses resolved via `mod_attendance_get_session` and matched case-insensitively; `takenbyid` comes from `core_webservice_get_site_info`.
+
+### Added
+
+- **Bulk course enrollment (phase A)**
+  - `POST /enrollments/bulk/preview` — dry run: resolves the department cohort (active students at a semester), validates every course exists *and* belongs to that department, reports per-course `to_create` / `already_enrolled` (`BulkEnrollmentPreview`).
+  - `POST /enrollments/bulk` — creates every missing pair, skips duplicates, and **auto-syncs the created ids to Moodle** (`MoodleSyncService.sync_enrollments`); returns `BulkEnrollmentResult` with the `sync_log`. Idempotent — a repeat run reports `created: 0, skipped: N`.
+  - `BulkEnrollmentRequest` / `BulkEnrollmentPreview` / `BulkEnrollmentResult` schemas; `list_students_for_cohort`, `list_courses_by_ids`, `existing_pairs` repository helpers; `DepartmentNotFoundError`, `CourseNotInDepartmentError` domain errors.
+- **Bulk student CSV import (phase D)**
+  - `POST /students/bulk` — CSV-as-JSON (`csv` field, no multipart dependency), `dry_run`, `sync_moodle`; header required (`roll_number,name,email,semester,section`[,`phone`]), UTF-8 BOM tolerated, 1-based row numbers including the header, savepoint-per-row, `MAX_BULK_ROWS = 5000`.
+  - `BulkStudentImportRequest` / `BulkStudentImportResult` / `BulkStudentRowError`, `BulkImportFormatError`, and `MoodleSyncService.sync_students(student_ids=…)` for targeted sync.
+- **Attendance summary (phase E)**
+  - `GET /students/{student_id}/attendance-summary` — per-course `present` / `total` / `percentage` plus an overall roll-up (`StudentAttendanceSummary`); `percentage` is `null` when `total == 0` (decision **D41**), unknown student → `404`.
+  - `AttendanceRepository.summary_by_course_for_student` + `AttendanceService.student_summary`.
+- **Frontend (phase E)** — four new pages, build up from 14 → 17 routes:
+  - `/students/[id]` — student detail with contact card, status/attendance stat cards, and the attendance-by-course table.
+  - `/students/bulk` — CSV paste + department + dry-run + Moodle-sync checkboxes with per-row error reporting (`components/BulkStudentImport.js`).
+  - `/enrollments` — enrollment list joined against students/courses for readable names, with delete and a link into bulk enroll.
+  - `/enrollments/bulk` — two-step preview → confirm workflow (`components/BulkEnrollForm.js`).
+  - Nav gained an **Enrollments** link; student names in the list now link to their detail page; the students list gained a **Bulk Import** button.
+
+### Verified
+
+- **Backend**: `uv run pytest` → **311 passing** (272 baseline + 39 new; no tests removed or weakened).
+- **Frontend**: `npm test` → 6 passing; `npm run build` succeeds (17 pages).
+- **Live Moodle probe** (all green): `core_user_get_users_by_field`, `core_course_get_courses_by_field`, `mod_attendance_add_attendance`, `mod_attendance_add_session`, `mod_attendance_get_session`, `mod_attendance_update_user_status` (twice), `core_grades_update_grades` (twice). Rows verified in `mdl_attendance_log`, `mdl_grade_grades`, `mdl_grade_items`, `mdl_attendance_sessions`.
+- **Live API E2E**: bulk preview → bulk enroll (created 1, `sync_log: Success — 1 enrollments synced`) → repeat run (`created 0, skipped 1`); bulk import dry run; attendance summary returns real per-course data; all four new pages render 200 with live data.
+- **OpenAPI**: 28 paths / 49 operations (was 24 paths); the route-completeness guard now also asserts the four new paths.
+
+### Notes
+
+- No new dependencies on either side; no schema change and no migration (still at head `0001`).
+- The Moodle Docker stack (`moodle-test/`) is the verification environment; never delete `moodle-postgres-data` or run `docker volume prune`.
+
+---
+
 ## Sprint 9 - Testing & Final Preparation — 2026-08-17
 
 ### Added
