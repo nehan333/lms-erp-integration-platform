@@ -6,9 +6,10 @@ No business logic lives here.
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.attendance import Attendance
@@ -54,3 +55,14 @@ class MoodleSyncRepository:
 
     def list_attendance(self) -> list[Attendance]:
         return list(self.db.scalars(select(Attendance)).all())
+
+    def earliest_attendance_dates(self) -> dict[UUID, date]:
+        """First ERP attendance date per course (empty when none recorded).
+
+        Used to anchor Moodle course start dates so attendance sessions are
+        never filtered out of the student's "This course" view.
+        """
+        statement = select(
+            Attendance.course_id, func.min(Attendance.date)
+        ).group_by(Attendance.course_id)
+        return {course_id: min_date for course_id, min_date in self.db.execute(statement)}

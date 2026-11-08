@@ -6,6 +6,20 @@ Each operation is idempotent (find-or-create by ERP key: roll_number ->
 Moodle username, course_code -> Moodle shortname). No fake success: a call is
 only recorded as ``Success`` when Moodle's real response validates.
 
+Concurrency: every public sync operation holds a PostgreSQL advisory lock for
+its whole duration, so two overlapping runs can never create duplicate Moodle
+users, courses, attendance activities, or attendance sessions. A run that
+cannot get the lock fails fast (``SyncInProgressError`` -> HTTP 409 for the
+full sync endpoint) instead of racing.
+
+Attendance idempotency: existing attendance activities and sessions are
+reused (the lowest instance id wins when several exist), each student's mark
+is only written when Moodle's ``attendance_log`` differs from the ERP status,
+and every write is read back from ``mod_attendance_get_sessions`` before the
+run is reported as successful. Session times are computed as local midnight
+in ``MOODLE_SITE_TIMEZONE`` and parsed back with the same zone, so results
+do not depend on the host process timezone.
+
 Moodle functions used (verified against Moodle 5.0.10):
 
 - ``core_webservice_get_site_info``       connection check / token user id
@@ -17,9 +31,9 @@ Moodle functions used (verified against Moodle 5.0.10):
 - ``enrol_manual_enrol_users``            enrolment sync
 - ``core_grades_update_grades``           grade sync (activity grade item)
 - ``mod_attendance_add_attendance``       ensure attendance activity exists
-- ``mod_attendance_get_sessions``         find a session for an ERP date
+- ``mod_attendance_get_sessions``         sessions, statuses and attendance_log
 - ``mod_attendance_add_session``          create the session when missing
-- ``mod_attendance_get_session``          read the instance's status set
+- ``mod_attendance_get_session``          fallback: read the status set
 - ``mod_attendance_update_user_status``   record one student's attendance
 
 The ``mod_attendance_*`` functions require the official Moodle Attendance
@@ -30,9 +44,13 @@ Moodle external service used by the ERP token.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time
+from collections.abc import Callable
+from contextlib import contextmanager
+from datetime import date, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -57,6 +75,69 @@ GRADE_UPDATE_OK = 0
 # Preferred activities to anchor a course's ERP final grade to, in order.
 GRADE_ACTIVITY_PREFERENCE = ("assign", "quiz", "workshop", "forum")
 
+# Two-int32 PostgreSQL advisory lock key serializing Moodle sync runs across
+# workers/processes ("LMSE" namespace, sync channel).
+SYNC_LOCK_KEY = (0x4C4D5345, 1)
+
+
+class SyncInProgressError(Exception):
+    """Raised when another Moodle sync already holds the sync lock."""
+
+
+def site_timezone() -> ZoneInfo:
+    """Timezone of the Moodle site (``MOODLE_SITE_TIMEZONE``)."""
+    return ZoneInfo(settings.MOODLE_SITE_TIMEZONE)
+
+
+def attendance_session_time(record_date: date) -> int:
+    """Unix timestamp of local midnight for ``record_date`` in the site TZ.
+
+    Used as the attendance session time so that sessions always land on the
+    ERP attendance date regardless of the host process timezone.
+    """
+    return payloads.local_midnight_ts(record_date)
+
+
+def attendance_session_date(sessdate: int | str) -> date:
+    """Calendar date of an attendance session, interpreted in the site TZ."""
+    return datetime.fromtimestamp(int(sessdate), tz=site_timezone()).date()
+
+
+def status_map_from(statuses: object) -> dict[str, int]:
+    """Map lowercased status description/acronym -> status id.
+
+    Status ids are never assumed: they come from Moodle's own response for
+    the instance/session (``get_sessions``/``get_session``).
+    """
+    mapping: dict[str, int] = {}
+    if not isinstance(statuses, (list, tuple)):
+        return mapping
+    for status in statuses:
+        if not isinstance(status, dict) or status.get("id") is None:
+            continue
+        try:
+            status_id = int(status["id"])
+        except (TypeError, ValueError):
+            continue
+        for field in ("description", "acronym"):
+            label = str(status.get(field) or "").strip().lower()
+            if label and label not in mapping:
+                mapping[label] = status_id
+    return mapping
+
+
+def session_status_log(session: dict) -> dict[int, int]:
+    """Map moodle user id -> status id from a session's ``attendance_log``."""
+    log: dict[int, int] = {}
+    for entry in session.get("attendance_log") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            log[int(entry["studentid"])] = int(entry["statusid"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return log
+
 
 class MoodleSyncService:
     """Orchestrates ERP -> Moodle synchronization and logging."""
@@ -74,6 +155,90 @@ class MoodleSyncService:
         self._attendance_instances: dict[int, int] = {}
         self._attendance_sessions: dict[int, dict[date, dict]] = {}
         self._attendance_status_cache: dict[tuple[int, int], dict[str, int]] = {}
+        # Cross-process sync lock (held on a dedicated connection so it
+        # survives the commit/release cycle of the main session).
+        self._lock_depth = 0
+        self._lock_conn = None
+
+    # ------------------------------------------------------------------ #
+    # Sync lock
+    # ------------------------------------------------------------------ #
+
+    def _try_acquire_lock(self) -> bool:
+        """Try to take the sync lock on a dedicated connection."""
+        if self._lock_conn is not None:
+            return True
+        conn = self.db.get_bind().connect()
+        try:
+            acquired = conn.execute(
+                text("SELECT pg_try_advisory_lock(:ns, :channel)"),
+                {"ns": SYNC_LOCK_KEY[0], "channel": SYNC_LOCK_KEY[1]},
+            ).scalar()
+        except Exception:
+            conn.close()
+            raise
+        if not acquired:
+            conn.close()
+            return False
+        self._lock_conn = conn
+        return True
+
+    def _release_lock(self) -> None:
+        conn = self._lock_conn
+        self._lock_conn = None
+        if conn is None:
+            return
+        try:
+            conn.execute(
+                text("SELECT pg_advisory_unlock(:ns, :channel)"),
+                {"ns": SYNC_LOCK_KEY[0], "channel": SYNC_LOCK_KEY[1]},
+            )
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _sync_guard(self):
+        """Hold the sync lock for the duration of one sync operation.
+
+        Re-entrant for the same service instance so ``sync_all`` can call the
+        individual operations without deadlocking against itself. Raises
+        ``SyncInProgressError`` when another run already holds the lock.
+        """
+        if self._lock_depth > 0:
+            self._lock_depth += 1
+            try:
+                yield
+            finally:
+                self._lock_depth -= 1
+            return
+        if not self._try_acquire_lock():
+            raise SyncInProgressError(
+                "Another Moodle synchronization is already running"
+            )
+        self._lock_depth = 1
+        try:
+            yield
+        finally:
+            self._lock_depth = 0
+            self._release_lock()
+
+    def _run_locked(self, action: str, operation: Callable[[], SyncLog]) -> SyncLog:
+        """Run ``operation`` under the sync lock.
+
+        The individual operations keep their ``SyncLog`` contract: when the
+        lock is busy they record an honest ``Failed`` entry instead of
+        raising (the full-sync endpoint surfaces ``SyncInProgressError`` as
+        HTTP 409 instead).
+        """
+        try:
+            with self._sync_guard():
+                return operation()
+        except SyncInProgressError:
+            return self._record(
+                action=action,
+                status="Failed",
+                message="Another Moodle synchronization is already running",
+            )
 
     # ------------------------------------------------------------------ #
     # Helpers
@@ -178,20 +343,21 @@ class MoodleSyncService:
         return f"mod_{chosen['modname']}", int(chosen["id"])
 
     def _ensure_attendance_instance(self, moodle_course_id: int) -> int:
-        """Return the course's attendance instance id, creating it if missing."""
+        """Return the course's attendance instance id, creating it if missing.
+
+        When a course already has several attendance activities (created by a
+        past race) the lowest instance id wins so every later call converges
+        on the same one instead of scattering sessions across duplicates.
+        """
         if moodle_course_id in self._attendance_instances:
             return self._attendance_instances[moodle_course_id]
-        existing = next(
-            (
-                module
-                for module in self._get_course_modules(moodle_course_id)
-                if module.get("modname") == "attendance"
-                and module.get("instance")
-            ),
-            None,
-        )
-        if existing is not None:
-            attendance_id = int(existing["instance"])
+        existing_ids = [
+            int(module["instance"])
+            for module in self._get_course_modules(moodle_course_id)
+            if module.get("modname") == "attendance" and module.get("instance")
+        ]
+        if existing_ids:
+            attendance_id = min(existing_ids)
         else:
             result = self.client.call(
                 "mod_attendance_add_attendance",
@@ -214,7 +380,7 @@ class MoodleSyncService:
         if session is not None:
             return session
 
-        sessiontime = int(datetime.combine(record_date, time.min).timestamp())
+        sessiontime = attendance_session_time(record_date)
         self.client.call(
             "mod_attendance_add_session",
             payloads.attendance_session_params(
@@ -231,24 +397,40 @@ class MoodleSyncService:
             )
         return session
 
-    def _fetch_sessions(self, attendance_id: int) -> dict[date, dict]:
+    def _fetch_session_list(self, attendance_id: int) -> list[dict]:
+        """Raw session list from Moodle (handles list and id-keyed responses)."""
         result = self.client.call(
             "mod_attendance_get_sessions",
             {"attendanceid": str(attendance_id)},
         )
+        if isinstance(result, dict):
+            # Defensive: a non-list JSON object keyed by session id.
+            result = list(result.values())
+        if not isinstance(result, list):
+            return []
+        return [
+            session
+            for session in result
+            if isinstance(session, dict) and "sessdate" in session
+        ]
+
+    def _fetch_sessions(self, attendance_id: int) -> dict[date, dict]:
         sessions: dict[date, dict] = {}
-        if isinstance(result, list):
-            for session in result:
-                if not isinstance(session, dict) or "sessdate" not in session:
-                    continue
-                session_date = datetime.fromtimestamp(
-                    int(session["sessdate"])
-                ).date()
-                sessions.setdefault(session_date, session)
+        for session in self._fetch_session_list(attendance_id):
+            session_date = attendance_session_date(session["sessdate"])
+            sessions.setdefault(session_date, session)
         return sessions
 
     def _attendance_statuses(self, attendance_id: int, session: dict) -> dict[str, int]:
-        """Map lowercased status description -> status id for a session."""
+        """Map lowercased status description -> status id for a session.
+
+        Prefers the status set embedded in the ``get_sessions`` payload (no
+        extra call) and falls back to ``mod_attendance_get_session``. Ids
+        always come from Moodle, never from constants in this codebase.
+        """
+        embedded = status_map_from(session.get("statuses"))
+        if embedded:
+            return embedded
         status_set = int(session.get("statusset", 0))
         key = (attendance_id, status_set)
         if key not in self._attendance_status_cache:
@@ -256,12 +438,9 @@ class MoodleSyncService:
                 "mod_attendance_get_session",
                 {"sessionid": str(session["id"])},
             )
-            statuses: dict[str, int] = {}
-            for status in detail.get("statuses", []) or []:
-                description = str(status.get("description", "")).strip().lower()
-                if description:
-                    statuses[description] = int(status["id"])
-            self._attendance_status_cache[key] = statuses
+            self._attendance_status_cache[key] = status_map_from(
+                detail.get("statuses") if isinstance(detail, dict) else None
+            )
         return self._attendance_status_cache[key]
 
     # ------------------------------------------------------------------ #
@@ -284,6 +463,13 @@ class MoodleSyncService:
         With ``student_ids`` only those students are pushed (used by the bulk
         CSV import right after it created them).
         """
+        return self._run_locked(
+            "sync_students", lambda: self._sync_students(student_ids)
+        )
+
+    def _sync_students(
+        self, student_ids: list[UUID] | None = None
+    ) -> SyncLog:
         students = self.repo.list_students(student_ids)
         if not students:
             return self._record(action="sync_students", status="Success",
@@ -327,10 +513,18 @@ class MoodleSyncService:
 
     def sync_courses(self) -> SyncLog:
         """Create Moodle courses for ERP courses (find-or-create)."""
+        return self._run_locked("sync_courses", self._sync_courses)
+
+    def _sync_courses(self) -> SyncLog:
         courses = self.repo.list_courses()
         if not courses:
             return self._record(action="sync_courses", status="Success",
                                 message="No courses to sync")
+
+        # Anchor new courses at their first attendance record (or the overall
+        # earliest one) so Moodle never starts the course after its sessions.
+        earliest = self.repo.earliest_attendance_dates()
+        fallback_start = min(earliest.values()) if earliest else None
 
         failures: list[str] = []
         created = 0
@@ -346,7 +540,9 @@ class MoodleSyncService:
                 self.client.call(
                     "core_course_create_courses",
                     payloads.course_create_params(
-                        course, settings.MOODLE_DEFAULT_CATEGORY_ID
+                        course,
+                        settings.MOODLE_DEFAULT_CATEGORY_ID,
+                        earliest.get(course.id, fallback_start),
                     ),
                 )
                 created += 1
@@ -373,6 +569,13 @@ class MoodleSyncService:
         not configured the run is recorded as ``Failed`` with an explicit
         "pending sync" message instead of pretending success.
         """
+        return self._run_locked(
+            "sync_enrollments", lambda: self._sync_enrollments(enrollment_ids)
+        )
+
+    def _sync_enrollments(
+        self, enrollment_ids: list[UUID] | None = None
+    ) -> SyncLog:
         enrollments = self.repo.list_enrollments(enrollment_ids)
         if not enrollments:
             return self._record(action="sync_enrollments", status="Success",
@@ -426,6 +629,9 @@ class MoodleSyncService:
         converted to points (see ``payloads.final_grade_to_points``) and the
         original letter is kept as the grade feedback.
         """
+        return self._run_locked("sync_grades", self._sync_grades)
+
+    def _sync_grades(self) -> SyncLog:
         grades = self.repo.list_grades()
         if not grades:
             return self._record(action="sync_grades", status="Success",
@@ -496,7 +702,15 @@ class MoodleSyncService:
         Present/Absent status in that session
         (``mod_attendance_update_user_status``). Moodle upserts on
         (session, student), so repeated runs update rather than duplicate.
+
+        Idempotent by construction: a mark whose status id already matches
+        Moodle's ``attendance_log`` is skipped (no write, no ``timetaken``
+        churn), and every written mark is read back from Moodle before the
+        run is reported as successful.
         """
+        return self._run_locked("sync_attendance", self._sync_attendance)
+
+    def _sync_attendance(self) -> SyncLog:
         records = self.repo.list_attendance()
         if not records:
             return self._record(action="sync_attendance", status="Success",
@@ -508,7 +722,8 @@ class MoodleSyncService:
 
         failures: list[str] = []
         failed_records = 0
-        synced = 0
+        written = 0
+        unchanged = 0
         for course_code, course_records in by_course.items():
             try:
                 moodle_course_id = self._lookup_course_id(course_code)
@@ -525,6 +740,7 @@ class MoodleSyncService:
             for record in course_records:
                 by_date.setdefault(record.date, []).append(record)
 
+            pending: list[tuple[int, int, int]] = []
             for record_date, day_records in by_date.items():
                 try:
                     session = self._ensure_attendance_session(
@@ -538,6 +754,7 @@ class MoodleSyncService:
                     failures.append(f"{course_code}/{record_date}: {exc}")
                     continue
 
+                current_log = session_status_log(session)
                 for record in day_records:
                     key = (
                         f"{record.student.roll_number}/"
@@ -554,6 +771,10 @@ class MoodleSyncService:
                                 f"Moodle has no status '{record.status}' "
                                 f"for course '{course_code}'",
                             )
+                        if current_log.get(user_id) == status_id:
+                            # Moodle already shows exactly what the ERP says.
+                            unchanged += 1
+                            continue
                         self.client.call(
                             "mod_attendance_update_user_status",
                             payloads.attendance_status_params(
@@ -564,31 +785,83 @@ class MoodleSyncService:
                                 status_set=int(session.get("statusset", 0)),
                             ),
                         )
-                        synced += 1
+                        written += 1
+                        pending.append(
+                            (int(session["id"]), user_id, status_id)
+                        )
                     except (MoodleError, ValueError, KeyError) as exc:
                         failed_records += 1
                         failures.append(f"{key}: {exc}")
 
+            if pending:
+                failed_records += self._verify_written_marks(
+                    attendance_id, pending, course_code, failures
+                )
+
         if failures:
             message = (
-                f"{failed_records} of {len(records)} records failed: "
+                f"{failed_records} of {len(records)} records failed "
+                f"({written} written, {unchanged} already up-to-date): "
                 + "; ".join(failures[:5])
             )
             return self._record(action="sync_attendance", status="Failed",
                                 message=message)
         return self._record(
             action="sync_attendance", status="Success",
-            message=f"{synced} attendance records synced",
+            message=f"{written} written, {unchanged} already up-to-date",
         )
 
+    def _verify_written_marks(
+        self,
+        attendance_id: int,
+        pending: list[tuple[int, int, int]],
+        course_code: str,
+        failures: list[str],
+    ) -> int:
+        """Read marks back from Moodle; return how many are missing.
+
+        A WebSocket call that returns HTTP 200 is not proof: the mark must
+        actually appear in the session's ``attendance_log``. When the
+        response carries no ``attendance_log`` the check is skipped rather
+        than inventing a result.
+        """
+        try:
+            sessions = self._fetch_session_list(attendance_id)
+        except MoodleError as exc:
+            failures.append(f"{course_code}: read-back failed: {exc}")
+            return len(pending)
+        by_id = {
+            int(session["id"]): session
+            for session in sessions
+            if session.get("id") is not None
+        }
+        missing = 0
+        for session_id, user_id, status_id in pending:
+            session = by_id.get(session_id)
+            if session is None or "attendance_log" not in session:
+                continue
+            if session_status_log(session).get(user_id) != status_id:
+                missing += 1
+                failures.append(
+                    f"{course_code}/session {session_id}: mark for user "
+                    f"{user_id} not visible in Moodle after write"
+                )
+        return missing
+
     def sync_all(self) -> list[SyncLog]:
-        """Run every sync operation in dependency order and return the logs."""
+        """Run every sync operation in dependency order and return the logs.
+
+        Holds the sync lock for the whole run; raises
+        ``SyncInProgressError`` when another sync is already running (the
+        endpoint maps that to HTTP 409).
+        """
         if not self.client.is_configured:
             raise MoodleNotConfiguredError()
-        return [
-            self.sync_students(),
-            self.sync_courses(),
-            self.sync_enrollments(),
-            self.sync_grades(),
-            self.sync_attendance(),
-        ]
+        with self._sync_guard():
+            return [
+                self.sync_students(),
+                self.sync_courses(),
+                self.sync_enrollments(),
+                self.sync_grades(),
+                self.sync_attendance(),
+            ]

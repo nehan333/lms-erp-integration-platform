@@ -127,3 +127,19 @@ def test_attendance_status_params():
     assert params["takenbyid"] == "3"
     assert params["statusid"] == "5"
     assert params["statusset"] == "0"
+
+
+def test_course_create_params_with_startdate():
+    from datetime import date
+
+    course = type("C", (), {"course_code": "CS101", "course_name": "Data Structures"})()
+    params = payloads.course_create_params(course, 3, date(2025, 8, 6))
+    # 2025-08-06 00:00 Asia/Kolkata == 2025-08-05 18:30 UTC
+    assert params["courses[0][startdate]"] == "1754418600"
+    assert params["courses[0][shortname]"] == "CS101"
+
+
+def test_local_midnight_ts_uses_site_timezone():
+    from datetime import date
+
+    assert payloads.local_midnight_ts(date(2025, 8, 1)) == 1753986600

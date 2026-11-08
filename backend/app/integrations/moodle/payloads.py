@@ -6,11 +6,24 @@ REST uses the ``param[i][field]`` convention for repeated structures.
 
 from __future__ import annotations
 
+from datetime import date, datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.core.config import settings
 from app.models.course import Course
 from app.models.student import Student
+
+
+def local_midnight_ts(day: date) -> int:
+    """Unix timestamp of local midnight for ``day`` in the Moodle site TZ.
+
+    Moodle interprets course/session timestamps in the site timezone, so all
+    values we send are computed in ``MOODLE_SITE_TIMEZONE`` instead of the
+    host process timezone.
+    """
+    tz = ZoneInfo(settings.MOODLE_SITE_TIMEZONE)
+    return int(datetime.combine(day, time.min, tzinfo=tz).timestamp())
 
 
 def _split_name(full_name: str) -> tuple[str, str]:
@@ -45,13 +58,25 @@ def course_lookup_params(course_code: str) -> dict[str, Any]:
     return {"field": "shortname", "value": course_code}
 
 
-def course_create_params(course: Course, category_id: int) -> dict[str, Any]:
-    """Create a Moodle course from an ERP course (``core_course_create_courses``)."""
-    return {
+def course_create_params(
+    course: Course, category_id: int, startdate: date | None = None
+) -> dict[str, Any]:
+    """Create a Moodle course from an ERP course (``core_course_create_courses``).
+
+    ``startdate`` anchors the course's start date to the first ERP attendance
+    record of that course (local midnight in the site timezone). Without it
+    Moodle defaults to the creation date, and the attendance plugin's
+    "This course" student view then hides every earlier session
+    (``sessdate >= course.startdate``).
+    """
+    params: dict[str, Any] = {
         "courses[0][fullname]": course.course_name,
         "courses[0][shortname]": course.course_code,
         "courses[0][categoryid]": str(category_id),
     }
+    if startdate is not None:
+        params["courses[0][startdate]"] = str(local_midnight_ts(startdate))
+    return params
 
 
 def enrollment_params(
@@ -144,8 +169,9 @@ def attendance_session_params(
 ) -> dict[str, Any]:
     """Create a session on an attendance instance (``mod_attendance_add_session``).
 
-    ``sessiontime`` is the unix timestamp of the ERP attendance date (local
-    midnight). ``groupid`` 0 matches the instance created with ``groupmode`` 0.
+    ``sessiontime`` is the unix timestamp of local midnight for the ERP
+    attendance date in ``MOODLE_SITE_TIMEZONE``. ``groupid`` 0 matches the
+    instance created with ``groupmode`` 0.
     """
     return {
         "attendanceid": str(attendance_id),

@@ -18,7 +18,7 @@ from app.integrations.moodle import (
 from app.integrations.moodle.client import MoodleClient
 from app.schemas.moodle import MoodleStatus, MoodleSyncResult
 from app.schemas.sync_log import SyncLogRead
-from app.services.moodle import MoodleSyncService
+from app.services.moodle import MoodleSyncService, SyncInProgressError
 
 router = APIRouter(prefix="/integrations/moodle", tags=["moodle"])
 
@@ -67,6 +67,10 @@ def run_sync(
     service = MoodleSyncService(db, client)
     try:
         logs = service.sync_all()
+    except SyncInProgressError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except MoodleNotConfiguredError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)

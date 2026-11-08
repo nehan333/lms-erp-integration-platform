@@ -104,3 +104,30 @@ def test_openapi_documents_moodle(client):
     assert "/integrations/moodle/sync" in schema["paths"]
     for name in ["MoodleStatus", "MoodleSyncResult"]:
         assert name in schema["components"]["schemas"]
+
+
+def test_sync_returns_409_when_already_running(client, db_session, test_engine):
+    from sqlalchemy import text
+
+    from app.services.moodle import SYNC_LOCK_KEY
+
+    _seed_erp(db_session)
+    fake = _success_client()
+    _override_client(client.app, fake)
+
+    conn = test_engine.connect()
+    conn.execute(
+        text("SELECT pg_try_advisory_lock(:ns, :channel)"),
+        {"ns": SYNC_LOCK_KEY[0], "channel": SYNC_LOCK_KEY[1]},
+    )
+    try:
+        response = client.post("/integrations/moodle/sync")
+        assert response.status_code == 409
+        assert "already running" in response.json()["detail"].lower()
+        assert fake.calls == [], "must not touch Moodle while locked"
+    finally:
+        conn.execute(
+            text("SELECT pg_advisory_unlock(:ns, :channel)"),
+            {"ns": SYNC_LOCK_KEY[0], "channel": SYNC_LOCK_KEY[1]},
+        )
+        conn.close()
